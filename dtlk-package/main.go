@@ -13,15 +13,15 @@ var version = "dev"
 
 func usage() {
 	server, _ := serverURL()
-	fmt.Fprintf(os.Stderr, `dtlk - 파일/폴더를 6자리 코드로 주고받기
+	fmt.Fprintf(os.Stderr, `dtlk - Transfer files and folders with a 6-digit code
 
-사용법:
-  dtlk up [--h 시간] <파일 또는 폴더>   업로드하고 6자리 코드를 출력 (보관 기본 24시간, 1~168)
-  dtlk down <6자리 코드>              현재 폴더에 다운로드
-  dtlk version                       버전 출력
+Usage:
+  dtlk up [--h hours] <file-or-dir>   Upload and print a 6-digit code (retention: default 24h, 1-168)
+  dtlk down <6-digit-code>            Download into the current directory
+  dtlk version                        Print version
 
-서버: %s
-  (설정 파일 %s, 환경변수 DTLK_SERVER로 변경)
+Server: %s
+  (config: %s, override with DTLK_SERVER)
 `, server, configPath())
 }
 
@@ -51,22 +51,22 @@ func run(args []string) int {
 		usage()
 		return 0
 	default:
-		fmt.Fprintf(os.Stderr, "알 수 없는 명령: %s\n\n", args[0])
+		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", args[0])
 		usage()
 		return 2
 	}
 
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
-			fmt.Fprintln(os.Stderr, "\n취소되었습니다.")
+			fmt.Fprintln(os.Stderr, "\nCanceled.")
 			return 130
 		}
 		var ue *usageError
 		if errors.As(err, &ue) {
-			fmt.Fprintf(os.Stderr, "오류: %s\n", ue.msg)
+			fmt.Fprintf(os.Stderr, "Error: %s\n", ue.msg)
 			return 2
 		}
-		fmt.Fprintf(os.Stderr, "오류: %s\n", err)
+		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 		return 1
 	}
 	return 0

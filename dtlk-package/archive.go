@@ -125,7 +125,7 @@ func writeTar(ctx context.Context, w io.Writer, root, top string, warn func(stri
 				return err
 			}
 		default:
-			warn(fmt.Sprintf("건너뜀 (일반 파일/폴더/링크가 아님): %s", p))
+			warn(fmt.Sprintf("Skipping unsupported file type: %s", p))
 			return nil
 		}
 		hdr, err := tar.FileInfoHeader(info, link)
@@ -147,7 +147,7 @@ func writeTar(ctx context.Context, w io.Writer, root, top string, warn func(stri
 		defer f.Close()
 		if _, err := io.CopyN(tw, &countingReader{r: f, on: onRead}, hdr.Size); err != nil {
 			if errors.Is(err, io.EOF) {
-				return fmt.Errorf("업로드 중 파일 크기가 바뀌었습니다: %s", p)
+				return fmt.Errorf("file size changed during upload: %s", p)
 			}
 			return err
 		}
@@ -163,11 +163,11 @@ func writeTar(ctx context.Context, w io.Writer, root, top string, warn func(stri
 func cleanEntryName(name string) (string, error) {
 	n := strings.TrimSuffix(name, "/")
 	if n == "" || strings.HasPrefix(n, "/") {
-		return "", fmt.Errorf("잘못된 항목 경로: %q", name)
+		return "", fmt.Errorf("invalid archive entry path: %q", name)
 	}
 	for _, part := range strings.Split(n, "/") {
 		if part == "" || part == "." || part == ".." || strings.ContainsRune(part, 0) {
-			return "", fmt.Errorf("잘못된 항목 경로: %q", name)
+			return "", fmt.Errorf("invalid archive entry path: %q", name)
 		}
 	}
 	return n, nil
@@ -188,7 +188,7 @@ func checkNoSymlinkParents(dest, rel string) error {
 			return err
 		}
 		if fi.Mode()&fs.ModeSymlink != 0 {
-			return fmt.Errorf("링크를 거치는 항목은 풀 수 없습니다: %q", rel)
+			return fmt.Errorf("refusing to extract through symlink: %q", rel)
 		}
 	}
 	return nil
@@ -218,7 +218,7 @@ func extractTar(r io.Reader, dest string) (string, error) {
 			break
 		}
 		if err != nil {
-			return "", fmt.Errorf("받은 데이터가 손상되었습니다: %w", err)
+			return "", fmt.Errorf("downloaded archive is corrupted: %w", err)
 		}
 		rel, err := cleanEntryName(hdr.Name)
 		if err != nil {
@@ -228,7 +228,7 @@ func extractTar(r io.Reader, dest string) (string, error) {
 		if top == "" {
 			top = first
 		} else if first != top {
-			return "", fmt.Errorf("잘못된 항목 경로: %q", hdr.Name)
+			return "", fmt.Errorf("invalid archive entry path: %q", hdr.Name)
 		}
 		if err := checkNoSymlinkParents(dest, rel); err != nil {
 			return "", err
@@ -254,11 +254,11 @@ func extractTar(r io.Reader, dest string) (string, error) {
 			}
 			links = append(links, linkMeta{rel, target, hdr.Linkname})
 		default:
-			return "", fmt.Errorf("지원하지 않는 항목 종류: %q", hdr.Name)
+			return "", fmt.Errorf("unsupported archive entry type: %q", hdr.Name)
 		}
 	}
 	if top == "" {
-		return "", errors.New("받은 데이터가 비어 있습니다")
+		return "", errors.New("downloaded archive is empty")
 	}
 	for _, l := range links {
 		if err := checkNoSymlinkParents(dest, l.rel); err != nil {
@@ -285,7 +285,7 @@ func writeFile(path string, r io.Reader, hdr *tar.Header) error {
 	}
 	if _, err := io.Copy(f, r); err != nil {
 		f.Close()
-		return fmt.Errorf("받은 데이터가 손상되었습니다: %w", err)
+		return fmt.Errorf("downloaded archive is corrupted: %w", err)
 	}
 	if err := f.Close(); err != nil {
 		return err

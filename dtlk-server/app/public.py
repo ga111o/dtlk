@@ -49,16 +49,16 @@ def create_public_app(svc: Service) -> FastAPI:
     async def put_part(upload_id: str, n: int, request: Request) -> dict[str, bool]:
         length = request.headers.get("content-length", "")
         if not length.isdigit():
-            raise ApiError(411, "Content-Length가 필요합니다")
+            raise ApiError(411, "Content-Length is required")
         if int(length) > cfg.chunk_size:
-            raise ApiError(413, "조각이 너무 큽니다")
+            raise ApiError(413, "Part is too large")
         data = bytearray()
         async for chunk in request.stream():
             data += chunk
             if len(data) > cfg.chunk_size:
-                raise ApiError(413, "조각이 너무 큽니다")
+                raise ApiError(413, "Part is too large")
         if len(data) != int(length):
-            raise ApiError(400, "조각이 중간에 끊겼습니다")
+            raise ApiError(400, "Incomplete part body")
         await run_in_threadpool(svc.put_part, upload_id, n, bytes(data))
         return {"ok": True}
 
@@ -130,6 +130,6 @@ def create_public_app(svc: Service) -> FastAPI:
         except Exception:
             body.close()
             log.exception("browser download of %s failed", code)
-            raise ApiError(500, "파일을 여는 중 오류가 발생했습니다")
+            raise ApiError(500, "Failed to open archive")
 
     return app

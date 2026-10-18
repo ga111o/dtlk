@@ -41,7 +41,7 @@ def test_upload_download_roundtrip(env):
 def test_hours_out_of_range(env, hours):
     r = env.public.post("/api/uploads", json={"name": "a", "kind": "file", "estimated_size": 1, "hours": hours})
     assert r.status_code == 400
-    assert "1~168" in r.json()["detail"]
+    assert "168" in r.json()["detail"]
 
 
 def test_hours_must_be_integer(env):

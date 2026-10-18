@@ -86,19 +86,19 @@ class Service:
         files, reserved = self._used(c, now)
         used = files + reserved
         if used + extra > cap:
-            raise ApiError(507, f"서버 저장 공간이 부족합니다 (사용 {human(used)} / 상한 {human(cap)}). 나중에 다시 시도하세요")
+            raise ApiError(507, f"Server storage full ({human(used)} / {human(cap)} used); please try again later")
 
     # ---- uploads --------------------------------------------------------
 
     def create_upload(self, ip: str, name: str, kind: str, estimated_size: int, hours: int) -> dict[str, Any]:
         if not valid_name(name):
-            raise ApiError(400, "올릴 수 없는 이름입니다")
+            raise ApiError(400, "Invalid file name")
         if kind not in KINDS:
-            raise ApiError(400, "kind는 file 또는 dir이어야 합니다")
+            raise ApiError(400, "kind must be 'file' or 'dir'")
         if not 1 <= hours <= self.cfg.max_hours:
-            raise ApiError(400, f"보관 시간은 1~{self.cfg.max_hours} 사이의 정수(시간)여야 합니다")
+            raise ApiError(400, f"Retention hours must be an integer between 1 and {self.cfg.max_hours}")
         if estimated_size < 0:
-            raise ApiError(400, "estimated_size가 잘못되었습니다")
+            raise ApiError(400, "Invalid estimated_size")
 
         reserve = min(estimated_size, self.cfg.max_upload_bytes)
         s = self.settings()
@@ -113,9 +113,9 @@ class Service:
                 "SELECT COUNT(*), MIN(ts) FROM upload_starts WHERE ip = ? AND ts > ?", (ip, now - 3600)
             ).fetchone()
             if active >= s["upload_concurrent_max"]:
-                error = ApiError(429, f"동시에 진행할 수 있는 업로드는 {s['upload_concurrent_max']}개까지입니다. 진행 중인 업로드가 끝난 뒤 다시 시도하세요")
+                error = ApiError(429, f"Too many concurrent uploads (max {s['upload_concurrent_max']}); wait for active uploads to finish")
             elif recent[0] >= s["upload_hourly_max"]:
-                error = ApiError(429, f"업로드는 1시간에 {s['upload_hourly_max']}개까지입니다", retry_after=recent[1] + 3600 - now)
+                error = ApiError(429, f"Hourly upload limit reached (max {s['upload_hourly_max']} per hour)", retry_after=recent[1] + 3600 - now)
             else:
                 self._check_cap(c, now, reserve, s["storage_cap_bytes"])
                 c.execute(
@@ -133,7 +133,7 @@ class Service:
             log.exception("create_multipart failed")
             with self.db.tx() as c:
                 c.execute("DELETE FROM uploads WHERE id = ?", (upload_id,))
-            raise ApiError(503, "저장소에 연결할 수 없습니다. 잠시 후 다시 시도하세요")
+            raise ApiError(503, "Storage unavailable; please try again shortly")
         with self.db.tx() as c:
             c.execute("UPDATE uploads SET s3_upload_id = ? WHERE id = ?", (s3_id, upload_id))
         log.info("upload %s started by %s: %s (%s, %dh)", upload_id[:8], ip, name, kind, hours)
@@ -142,32 +142,32 @@ class Service:
     def _open_upload(self, c: sqlite3.Connection, upload_id: str) -> sqlite3.Row:
         row = c.execute("SELECT * FROM uploads WHERE id = ?", (upload_id,)).fetchone()
         if row is None:
-            raise ApiError(404, "업로드를 찾을 수 없습니다 (취소되었거나 오래 멈춰 정리됨)")
+            raise ApiError(404, "Upload not found (canceled or expired)")
         if row["state"] != "open" or row["s3_upload_id"] is None:
-            raise ApiError(409, "지금은 이 업로드에 조각을 보낼 수 없습니다")
+            raise ApiError(409, "Upload is not accepting parts")
         return row
 
     def put_part(self, upload_id: str, n: int, data: bytes) -> None:
         size = len(data)
         if not 1 <= n <= MAX_PARTS:
-            raise ApiError(400, "조각 번호가 잘못되었습니다")
+            raise ApiError(400, "Invalid part number")
         if size == 0:
-            raise ApiError(400, "빈 조각은 보낼 수 없습니다")
+            raise ApiError(400, "Empty part is not allowed")
         if size > self.cfg.chunk_size:
-            raise ApiError(413, "조각이 너무 큽니다")
+            raise ApiError(413, "Part is too large")
 
         s = self.settings()
         now = self.clock()
         with self.db.tx() as c:
             row = self._open_upload(c, upload_id)
             if n in self._inflight.get(upload_id, {}):
-                raise ApiError(409, "같은 조각을 이미 받는 중입니다")
+                raise ApiError(409, "Part is already being uploaded")
             stored = c.execute(
                 "SELECT COALESCE(SUM(size), 0) FROM upload_parts WHERE upload_id = ? AND n != ?", (upload_id, n)
             ).fetchone()[0]
             total = stored + sum(self._inflight.get(upload_id, {}).values()) + size
             if total > self.cfg.max_upload_bytes:
-                raise ApiError(413, f"압축 후 크기가 {human(self.cfg.max_upload_bytes)}를 넘었습니다")
+                raise ApiError(413, f"Compressed size exceeds the {human(self.cfg.max_upload_bytes)} limit")
             if total > row["reserved"]:
                 self._check_cap(c, now, total - row["reserved"], s["storage_cap_bytes"])
                 c.execute("UPDATE uploads SET reserved = ? WHERE id = ?", (total, upload_id))
@@ -179,7 +179,7 @@ class Service:
             etag = self.storage.upload_part(row["object_key"], row["s3_upload_id"], n, data)
         except Exception:
             log.exception("upload_part failed")
-            raise ApiError(503, "저장소에 쓰지 못했습니다. 잠시 후 다시 시도하세요")
+            raise ApiError(503, "Failed to write to storage; please try again shortly")
         finally:
             with self.db.lock:
                 inflight.pop(n, None)
@@ -202,12 +202,12 @@ class Service:
         with self.db.tx() as c:
             row = self._open_upload(c, upload_id)
             if self._inflight.get(upload_id):
-                raise ApiError(409, "아직 전송 중인 조각이 있습니다")
+                raise ApiError(409, "Parts are still in flight")
             parts = c.execute(
                 "SELECT n, etag, size FROM upload_parts WHERE upload_id = ? ORDER BY n", (upload_id,)
             ).fetchall()
             if not parts or [p["n"] for p in parts] != list(range(1, len(parts) + 1)):
-                raise ApiError(400, "빠진 조각이 있습니다")
+                raise ApiError(400, "Missing upload parts")
             c.execute("UPDATE uploads SET state = 'completing' WHERE id = ?", (upload_id,))
 
         try:
@@ -216,7 +216,7 @@ class Service:
             log.exception("complete_multipart failed")
             with self.db.tx() as c:
                 c.execute("UPDATE uploads SET state = 'open', updated_at = ? WHERE id = ?", (self.clock(), upload_id))
-            raise ApiError(503, "저장소에서 업로드를 마무리하지 못했습니다. 잠시 후 다시 시도하세요")
+            raise ApiError(503, "Failed to finalize upload in storage; please try again shortly")
 
         size = sum(p["size"] for p in parts)
         now = self.clock()
@@ -258,7 +258,7 @@ class Service:
         with self.db.tx() as c:
             block = c.execute("SELECT until FROM ip_blocks WHERE ip = ? AND until > ?", (ip, now)).fetchone()
             if block:
-                error = ApiError(429, "잘못된 코드를 너무 많이 입력해 잠시 차단되었습니다", retry_after=block["until"] - now)
+                error = ApiError(429, "Too many failed code lookups; temporarily blocked", retry_after=block["until"] - now)
             else:
                 row = c.execute("SELECT * FROM files WHERE code = ? AND expires_at > ?", (code, now)).fetchone()
                 if row:
@@ -272,7 +272,7 @@ class Service:
                     c.execute("INSERT OR REPLACE INTO ip_blocks (ip, until) VALUES (?, ?)", (ip, now + s["lookup_block_sec"]))
                     c.execute("DELETE FROM lookup_failures WHERE ip = ?", (ip,))
                     log.warning("blocked %s for %ds after %d failed lookups", ip, s["lookup_block_sec"], fails)
-                error = ApiError(404, "코드를 찾을 수 없습니다 (만료되었거나 잘못된 코드)")
+                error = ApiError(404, "Code not found or expired")
         raise error
 
     def delete_file(self, code: str) -> bool:

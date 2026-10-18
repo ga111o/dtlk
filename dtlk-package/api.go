@@ -28,14 +28,14 @@ type apiClient struct {
 func newAPIClient() (*apiClient, error) {
 	base, err := serverURL()
 	if err != nil {
-		return nil, fmt.Errorf("설정 파일을 읽을 수 없습니다: %w", err)
+		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.ResponseHeaderTimeout = 2 * time.Minute
 	return &apiClient{base: base, hc: &http.Client{Transport: tr}}, nil
 }
 
-// apiError is a non-2xx response; Detail is the server's (Korean) message.
+// apiError is a non-2xx response; Detail is the server's message.
 type apiError struct {
 	Status     int
 	Detail     string
@@ -45,10 +45,10 @@ type apiError struct {
 func (e *apiError) Error() string {
 	msg := e.Detail
 	if msg == "" {
-		msg = fmt.Sprintf("서버 응답 %d", e.Status)
+		msg = fmt.Sprintf("server returned %d", e.Status)
 	}
 	if e.RetryAfter > 0 {
-		msg += fmt.Sprintf(" (%s 후 다시 시도하세요)", e.RetryAfter.Round(time.Second))
+		msg += fmt.Sprintf(" (retry after %s)", e.RetryAfter.Round(time.Second))
 	}
 	return msg
 }
@@ -109,7 +109,7 @@ func (c *apiClient) send(req *http.Request) (*http.Response, error) {
 		if ctxErr := req.Context().Err(); ctxErr != nil && errors.Is(err, ctxErr) {
 			return nil, err
 		}
-		return nil, fmt.Errorf("서버(%s)와 통신할 수 없습니다: %w", c.base, err)
+		return nil, fmt.Errorf("cannot reach server (%s): %w", c.base, err)
 	}
 	if resp.StatusCode >= 300 {
 		defer resp.Body.Close()
@@ -129,7 +129,7 @@ func (c *apiClient) doJSON(req *http.Request, out any) error {
 		return err
 	}
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-		return fmt.Errorf("서버 응답을 해석할 수 없습니다: %w", err)
+		return fmt.Errorf("failed to decode server response: %w", err)
 	}
 	return nil
 }
@@ -183,7 +183,7 @@ func (c *apiClient) createUpload(ctx context.Context, r createUploadReq) (*creat
 		return nil, err
 	}
 	if out.UploadID == "" || out.ChunkSize <= 0 {
-		return nil, errors.New("서버 응답이 올바르지 않습니다")
+		return nil, errors.New("invalid response from server")
 	}
 	return &out, nil
 }
@@ -285,7 +285,7 @@ func (r *resumableReader) open() error {
 		resp.Body.Close()
 		idle.Stop()
 		cancel()
-		return errors.New("서버가 이어받기를 지원하지 않습니다")
+		return errors.New("server does not support resuming downloads")
 	}
 	r.body, r.cancel, r.idle = resp.Body, cancel, idle
 	return nil
@@ -309,7 +309,7 @@ func (r *resumableReader) retry(err error) error {
 		return err
 	}
 	if r.warn != nil {
-		r.warn(fmt.Sprintf("연결이 끊겨 이어받는 중 (%d/%d): %v", r.fails, maxRetries, err))
+		r.warn(fmt.Sprintf("Connection lost, resuming (%d/%d): %v", r.fails, maxRetries, err))
 	}
 	return sleepCtx(r.ctx, backoff(r.fails))
 }

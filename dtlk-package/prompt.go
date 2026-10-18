@@ -29,7 +29,7 @@ func (p *prompter) ask(msg string) (string, error) {
 	fmt.Fprint(p.out, msg)
 	line, err := p.in.ReadString('\n')
 	if err != nil && (err != io.EOF || line == "") {
-		return "", errors.New("입력이 끝나 중단합니다")
+		return "", errors.New("aborted: end of input")
 	}
 	return strings.TrimSpace(line), nil
 }
@@ -37,7 +37,7 @@ func (p *prompter) ask(msg string) (string, error) {
 // validName accepts a single path component usable as a file or folder name.
 func validName(s string) error {
 	if s == "" || s == "." || s == ".." || strings.ContainsAny(s, "/\x00") {
-		return fmt.Errorf("사용할 수 없는 이름입니다: %q", s)
+		return fmt.Errorf("invalid name: %q", s)
 	}
 	return nil
 }
@@ -96,9 +96,9 @@ func resolveTarget(dir, name string, isDir bool, p *prompter) (target string, ov
 			return target, false, nil
 		}
 		if p == nil {
-			return "", false, fmt.Errorf("'%s'이(가) 이미 있습니다. 터미널에서 실행하면 덮어쓰기 또는 이름 변경을 선택할 수 있습니다", target)
+			return "", false, fmt.Errorf("'%s' already exists (run in a terminal to overwrite or rename)", target)
 		}
-		ans, err := p.ask(fmt.Sprintf("'%s'이(가) 이미 있습니다. 덮어쓸까요? [y/n]: ", target))
+		ans, err := p.ask(fmt.Sprintf("'%s' already exists. Overwrite? [y/n]: ", target))
 		if err != nil {
 			return "", false, err
 		}
@@ -108,7 +108,7 @@ func resolveTarget(dir, name string, isDir bool, p *prompter) (target string, ov
 		case "n", "no":
 			def := freeName(dir, target, isDir)
 			for {
-				in, err := p.ask(fmt.Sprintf("새 이름 [%s]: ", def))
+				in, err := p.ask(fmt.Sprintf("New name [%s]: ", def))
 				if err != nil {
 					return "", false, err
 				}
@@ -123,7 +123,7 @@ func resolveTarget(dir, name string, isDir bool, p *prompter) (target string, ov
 				break
 			}
 		default:
-			fmt.Fprintln(p.out, "y 또는 n을 입력하세요.")
+			fmt.Fprintln(p.out, "Please enter y or n.")
 		}
 	}
 }
