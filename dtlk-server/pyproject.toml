@@ -1,0 +1,26 @@
+[project]
+name = "dtlk-server"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "boto3>=1.43",
+    "fastapi>=0.143",
+    "httpx2>=2.13",
+    "stream-zip>=0.0.84",
+    "streamlit>=1.66",
+    "tzdata>=2026.5",
+    "uvicorn[standard]>=0.54",
+]
+
+[dependency-groups]
+dev = [
+    "moto[s3]>=5.2",
+    "pytest>=9.1",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

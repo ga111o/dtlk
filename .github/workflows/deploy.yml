@@ -1,0 +1,76 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dtlk-server/**"
+      - "dtlk-package/**"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: dtlk-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    timeout-minutes: 30
+    env:
+      COMPOSE_FILE: dtlk-server/docker-compose.yml
+      COMPOSE_PROJECT_NAME: dtlk
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Write .env from secrets/variables
+        env:
+          RUSTFS_ACCESS_KEY: ${{ secrets.RUSTFS_ACCESS_KEY }}
+          RUSTFS_SECRET_KEY: ${{ secrets.RUSTFS_SECRET_KEY }}
+          DTLK_PORT: ${{ vars.DTLK_PORT || '8780' }}
+          DTLK_ADMIN_PORT: ${{ vars.DTLK_ADMIN_PORT || '8781' }}
+          DTLK_PUBLIC_URL: ${{ vars.DTLK_PUBLIC_URL || 'https://dtlk.ga111o.com' }}
+          DTLK_TRUSTED_PROXY_IPS: ${{ vars.DTLK_TRUSTED_PROXY_IPS || '127.0.0.1' }}
+          DTLK_TZ: ${{ vars.DTLK_TZ || 'Asia/Seoul' }}
+        run: |
+          if [ -z "$RUSTFS_ACCESS_KEY" ] || [ -z "$RUSTFS_SECRET_KEY" ]; then
+            echo "::error::Repository secrets RUSTFS_ACCESS_KEY and RUSTFS_SECRET_KEY are required"
+            exit 1
+          fi
+          umask 077
+          : > dtlk-server/.env
+          for key in RUSTFS_ACCESS_KEY RUSTFS_SECRET_KEY DTLK_PORT DTLK_ADMIN_PORT DTLK_PUBLIC_URL DTLK_TRUSTED_PROXY_IPS DTLK_TZ; do
+            value="${!key}"
+            case "$value" in
+              *"'"*|*$'\n'*) echo "::error::$key must not contain quotes or newlines"; exit 1 ;;
+            esac
+            # single quotes: compose must not interpolate $ in secrets
+            printf "%s='%s'\n" "$key" "$value" >> dtlk-server/.env
+          done
+          printf "GIT_SHA='%s'\n" "${GITHUB_SHA::7}" >> dtlk-server/.env
+          if [ "$DTLK_TRUSTED_PROXY_IPS" = "127.0.0.1" ]; then
+            echo "::warning::DTLK_TRUSTED_PROXY_IPS is not set; every client will look like the nginx server's IP"
+          fi
+
+      - name: Test (Go + pytest)
+        run: docker build -f dtlk-server/Dockerfile --target test --build-arg GIT_SHA="${GITHUB_SHA::7}" .
+
+      - name: Build and deploy
+        run: docker compose up -d --build --remove-orphans --wait --wait-timeout 300
+
+      - name: Health check
+        run: |
+          port="$(sed -n "s/^DTLK_PORT='\(.*\)'$/\1/p" dtlk-server/.env)"
+          curl -fsS --retry 5 --retry-delay 2 --retry-all-errors "http://127.0.0.1:${port}/api/health"
+          echo
+          docker compose ps
+
+      - name: Logs on failure
+        if: failure()
+        run: |
+          docker compose ps -a || true
+          docker compose logs --tail 200 || true
+
+      - name: Prune dangling images
+        if: success()
+        run: docker image prune -f

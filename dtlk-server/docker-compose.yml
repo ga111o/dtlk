@@ -1,0 +1,97 @@
+name: dtlk
+
+x-app: &app
+  build:
+    context: ..
+    dockerfile: dtlk-server/Dockerfile
+    target: runtime
+    args:
+      GIT_SHA: ${GIT_SHA:-dev}
+  restart: unless-stopped
+
+services:
+  # Named volumes start out root-owned; RustFS runs as 10001.
+  rustfs-init:
+    image: rustfs/rustfs:1.0.1
+    user: "0:0"
+    entrypoint: ["chown", "-R", "10001:10001", "/data"]
+    volumes:
+      - rustfs-data:/data
+    restart: "no"
+
+  rustfs:
+    image: rustfs/rustfs:1.0.1
+    restart: unless-stopped
+    depends_on:
+      rustfs-init:
+        condition: service_completed_successfully
+    environment:
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_CONSOLE_ENABLE: "false"
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?RUSTFS_ACCESS_KEY is required}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?RUSTFS_SECRET_KEY is required}
+    volumes:
+      - rustfs-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    # no ports: only reachable by the api container
+
+  api:
+    <<: *app
+    depends_on:
+      rustfs:
+        condition: service_healthy
+    environment:
+      TZ: ${DTLK_TZ:-Asia/Seoul}
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY}
+      DTLK_S3_ENDPOINT: http://rustfs:9000
+      DTLK_PUBLIC_URL: ${DTLK_PUBLIC_URL:-https://dtlk.ga111o.com}
+      DTLK_TRUSTED_PROXY_IPS: ${DTLK_TRUSTED_PROXY_IPS:-127.0.0.1}
+    ports:
+      - "${DTLK_PORT:-8780}:8000" # public API, proxied by nginx
+      # 8001 (admin API) is intentionally not published
+    volumes:
+      - api-data:/data
+      - rustfs-data:/rustfs-data:ro # only for the dashboard's disk usage
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  dashboard:
+    <<: *app
+    command:
+      - streamlit
+      - run
+      - dashboard/main.py
+      - --server.port=8501
+      - --server.address=0.0.0.0
+      - --server.headless=true
+      - --browser.gatherUsageStats=false
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      TZ: ${DTLK_TZ:-Asia/Seoul}
+      DTLK_TZ: ${DTLK_TZ:-Asia/Seoul}
+      DTLK_ADMIN_API: http://api:8001
+    ports:
+      - "${DTLK_ADMIN_PORT:-8781}:8501" # admin dashboard, private network only
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+volumes:
+  rustfs-data:
+  api-data:
