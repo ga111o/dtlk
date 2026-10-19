@@ -190,12 +190,10 @@ func cmdUp(ctx context.Context, args []string) error {
 	exp := res.ExpiresAt.Local()
 	web := c.base + "/" + res.Code
 	fmt.Fprintf(os.Stderr, "Upload complete (%s compressed)\n", humanBytes(sent))
-	fmt.Printf("Code:     %s\n", res.Code)
-	fmt.Printf("Expires:  %s (in %dh)\n", exp.Format("2006-01-02 15:04"), hours)
-	fmt.Printf("Download: dtlk down %s\n", res.Code)
-	fmt.Printf("Web:      %s\n", web)
+	fmt.Printf("  Code:     %s\n", res.Code)
+	fmt.Printf("  Expires:  %s (in %dh)\n", exp.Format("2006-01-02 15:04"), hours)
 	if opts.tag != "" {
-		fmt.Printf("List:     %s/files/%s\n", c.base, opts.tag)
+		fmt.Printf("  List:     %s/files/%s\n", c.base, opts.tag)
 	}
 	copyToClipboard(web)
 	return nil
