@@ -296,6 +296,7 @@ def test_file_list_by_tag(env):
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/html")
     assert r.headers["cache-control"] == "no-store"
     page = r.text
+    assert "<style" not in page and "<script" not in page and "style=" not in page  # plain HTML for old browsers
     assert "a.txt" in page and "photos/" in page
     assert f'href="/{a}"' in page and f'href="/{b}"' in page
     assert other not in page and plain not in page and "x.txt" not in page
