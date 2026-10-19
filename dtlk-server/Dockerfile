@@ -7,11 +7,11 @@ WORKDIR /src
 COPY dtlk-package/go.mod dtlk-package/go.sum ./
 RUN go mod download
 COPY dtlk-package/ ./
-ARG GIT_SHA=dev
+ARG DTLK_VERSION=dev
 RUN go vet ./... && CGO_ENABLED=0 go test ./...
 RUN mkdir /out && for arch in amd64 arm64; do \
       CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath \
-        -ldflags "-s -w -X main.version=${GIT_SHA}" -o /out/dtlk-linux-$arch . && \
+        -ldflags "-s -w -X main.version=${DTLK_VERSION}" -o /out/dtlk-linux-$arch . && \
       (cd /out && sha256sum dtlk-linux-$arch > dtlk-linux-$arch.sha256); \
     done
 

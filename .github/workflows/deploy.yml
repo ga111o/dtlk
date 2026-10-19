@@ -47,13 +47,16 @@ jobs:
             # single quotes: compose must not interpolate $ in secrets
             printf "%s='%s'\n" "$key" "$value" >> dtlk-server/.env
           done
-          printf "GIT_SHA='%s'\n" "${GITHUB_SHA::7}" >> dtlk-server/.env
+          # client version: yymmdd (commit date, KST)-<short sha>
+          DTLK_VERSION="$(TZ=Asia/Seoul git log -1 --format=%cd --date=format-local:%y%m%d)-${GITHUB_SHA::7}"
+          printf "DTLK_VERSION='%s'\n" "$DTLK_VERSION" >> dtlk-server/.env
+          echo "DTLK_VERSION=$DTLK_VERSION" >> "$GITHUB_ENV"
           if [ "$DTLK_TRUSTED_PROXY_IPS" = "127.0.0.1" ]; then
             echo "::warning::DTLK_TRUSTED_PROXY_IPS is not set; every client will look like the nginx server's IP"
           fi
 
       - name: Test (Go + pytest)
-        run: docker build -f dtlk-server/Dockerfile --target test --build-arg GIT_SHA="${GITHUB_SHA::7}" .
+        run: docker build -f dtlk-server/Dockerfile --target test --build-arg DTLK_VERSION="$DTLK_VERSION" .
 
       - name: Build and deploy
         run: docker compose up -d --build --remove-orphans --wait --wait-timeout 300

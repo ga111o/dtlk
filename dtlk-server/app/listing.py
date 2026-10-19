@@ -1,4 +1,4 @@
-"""The /files/<name> page: active files uploaded with `dtlk up -n <name>`.
+"""The /files/<tag> page: active files uploaded with `dtlk up -t <tag>`.
 
 Browsers (Accept: text/html) get an HTML table, everything else (curl, wget) plain text.
 The HTML is deliberately plain (no CSS, no JS) so that any browser, however old, renders it.

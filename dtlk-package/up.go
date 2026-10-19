@@ -24,18 +24,18 @@ const (
 func parseHours(s string) (int, error) {
 	h, err := strconv.Atoi(s)
 	if err != nil || h < 1 || h > maxHours {
-		return 0, usageErrorf("--h must be an integer between 1 and %d (hours): %s", maxHours, s)
+		return 0, usageErrorf("hours must be an integer between 1 and %d: %s", maxHours, s)
 	}
 	return h, nil
 }
 
 var tagRe = regexp.MustCompile(`^[a-z0-9_-]{1,64}$`)
 
-// parseTag lowercases a list name (-n); the server stores it the same way.
+// parseTag lowercases a list tag (-t); the server stores it the same way. "" means no tag.
 func parseTag(s string) (string, error) {
 	t := strings.ToLower(s)
-	if !tagRe.MatchString(t) {
-		return "", usageErrorf("-n must be 1-64 letters, digits, '-' or '_': %q", s)
+	if t != "" && !tagRe.MatchString(t) {
+		return "", usageErrorf("tag must be 1-64 letters, digits, '-' or '_': %q", s)
 	}
 	return t, nil
 }
@@ -46,40 +46,40 @@ type upOpts struct {
 	path  string
 }
 
-// parseUpArgs accepts "--h N" / "--h=N" and "-n NAME" / "-n=NAME" anywhere around a single path.
-func parseUpArgs(args []string) (o upOpts, err error) {
-	o.hours = defaultHours
+// parseUpArgs accepts "-h N" / "-h=N" and "-t TAG" / "-t=TAG" anywhere around a single path.
+// An option that is not given falls back to cfg (the config file), then to the built-in default.
+// An empty tag (-t "" or -t=) uploads without one, even when cfg has a tag.
+func parseUpArgs(args []string, cfg map[string]string) (o upOpts, err error) {
 	var paths []string
+	var hoursSet, tagSet bool
 	for i := 0; i < len(args); i++ {
 		a := args[i]
+		flag, val, hasVal := strings.Cut(a, "=")
 		switch {
-		case a == "--h":
-			if i+1 >= len(args) {
-				return upOpts{}, usageErrorf("missing hours after --h (1-%d)", maxHours)
-			}
-			i++
-			if o.hours, err = parseHours(args[i]); err != nil {
-				return upOpts{}, err
-			}
-		case strings.HasPrefix(a, "--h="):
-			if o.hours, err = parseHours(strings.TrimPrefix(a, "--h=")); err != nil {
-				return upOpts{}, err
-			}
-		case a == "-n":
-			if i+1 >= len(args) {
-				return upOpts{}, usageErrorf("missing name after -n")
-			}
-			i++
-			if o.tag, err = parseTag(args[i]); err != nil {
-				return upOpts{}, err
-			}
-		case strings.HasPrefix(a, "-n="):
-			if o.tag, err = parseTag(strings.TrimPrefix(a, "-n=")); err != nil {
-				return upOpts{}, err
-			}
 		case a == "--":
 			paths = append(paths, args[i+1:]...)
 			i = len(args)
+		case flag == "-h" || flag == "-t":
+			if !hasVal {
+				if i+1 >= len(args) {
+					if flag == "-h" {
+						return upOpts{}, usageErrorf("missing hours after -h (1-%d)", maxHours)
+					}
+					return upOpts{}, usageErrorf("missing tag after -t")
+				}
+				i++
+				val = args[i]
+			}
+			if flag == "-h" {
+				o.hours, err = parseHours(val)
+				hoursSet = true
+			} else {
+				o.tag, err = parseTag(val)
+				tagSet = true
+			}
+			if err != nil {
+				return upOpts{}, err
+			}
 		case strings.HasPrefix(a, "-") && a != "-":
 			return upOpts{}, usageErrorf("unknown option: %s", a)
 		default:
@@ -87,14 +87,32 @@ func parseUpArgs(args []string) (o upOpts, err error) {
 		}
 	}
 	if len(paths) != 1 {
-		return upOpts{}, usageErrorf("usage: dtlk up [--h hours] [-n name] <file-or-dir>")
+		return upOpts{}, usageErrorf("usage: dtlk up [-h hours] [-t tag] <file-or-dir>")
 	}
 	o.path = paths[0]
+
+	if !hoursSet {
+		o.hours = defaultHours
+		if v := cfg["hours"]; v != "" {
+			if o.hours, err = parseHours(v); err != nil {
+				return upOpts{}, usageErrorf("%v (in %s)", err, configPath())
+			}
+		}
+	}
+	if !tagSet {
+		if o.tag, err = parseTag(cfg["tag"]); err != nil {
+			return upOpts{}, usageErrorf("%v (in %s)", err, configPath())
+		}
+	}
 	return o, nil
 }
 
 func cmdUp(ctx context.Context, args []string) error {
-	opts, err := parseUpArgs(args)
+	cfg, err := readConfig()
+	if err != nil {
+		return fmt.Errorf("failed to read config file: %w", err)
+	}
+	opts, err := parseUpArgs(args, cfg)
 	if err != nil {
 		return err
 	}

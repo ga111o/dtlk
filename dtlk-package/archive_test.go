@@ -182,35 +182,53 @@ func TestExtractNeverWritesThroughSymlink(t *testing.T) {
 }
 
 func TestParseUpArgs(t *testing.T) {
+	cfg := map[string]string{"hours": "48", "tag": "asdf"}
 	ok := []struct {
 		args []string
+		cfg  map[string]string
 		want upOpts
 	}{
-		{[]string{"dir"}, upOpts{24, "", "dir"}},
-		{[]string{"--h", "3", "dir"}, upOpts{3, "", "dir"}},
-		{[]string{"dir", "--h", "48"}, upOpts{48, "", "dir"}},
-		{[]string{"--h=168", "dir"}, upOpts{168, "", "dir"}},
-		{[]string{"--h", "1", "--", "-weird"}, upOpts{1, "", "-weird"}},
-		{[]string{"-n", "MyProj", "dir"}, upOpts{24, "myproj", "dir"}},
-		{[]string{"dir", "-n", "x"}, upOpts{24, "x", "dir"}},
-		{[]string{"-n=a_b-1", "--h", "3", "dir"}, upOpts{3, "a_b-1", "dir"}},
-		{[]string{"-n", strings.Repeat("a", 64), "dir"}, upOpts{24, strings.Repeat("a", 64), "dir"}},
+		{[]string{"dir"}, nil, upOpts{24, "", "dir"}},
+		{[]string{"-h", "3", "dir"}, nil, upOpts{3, "", "dir"}},
+		{[]string{"dir", "-h", "48"}, nil, upOpts{48, "", "dir"}},
+		{[]string{"-h=168", "dir"}, nil, upOpts{168, "", "dir"}},
+		{[]string{"-h", "1", "--", "-weird"}, nil, upOpts{1, "", "-weird"}},
+		{[]string{"-t", "MyProj", "dir"}, nil, upOpts{24, "myproj", "dir"}},
+		{[]string{"dir", "-t", "x"}, nil, upOpts{24, "x", "dir"}},
+		{[]string{"-t=a_b-1", "-h", "3", "dir"}, nil, upOpts{3, "a_b-1", "dir"}},
+		{[]string{"-t", strings.Repeat("a", 64), "dir"}, nil, upOpts{24, strings.Repeat("a", 64), "dir"}},
+		{[]string{"-t", "", "dir"}, nil, upOpts{24, "", "dir"}},
+		{[]string{"a=b"}, nil, upOpts{24, "", "a=b"}},
+		// config defaults; explicit options win; -t "" drops the configured tag
+		{[]string{"dir"}, cfg, upOpts{48, "asdf", "dir"}},
+		{[]string{"dir"}, map[string]string{"tag": "MyProj"}, upOpts{24, "myproj", "dir"}},
+		{[]string{"-h", "3", "-t", "other", "dir"}, cfg, upOpts{3, "other", "dir"}},
+		{[]string{"dir", "-t", ""}, cfg, upOpts{48, "", "dir"}},
+		{[]string{"-t=", "dir"}, cfg, upOpts{48, "", "dir"}},
+		{[]string{"-h", "5", "-t", "x", "dir"}, map[string]string{"hours": "500", "tag": "a.b"}, upOpts{5, "x", "dir"}},
 	}
 	for _, c := range ok {
-		got, err := parseUpArgs(c.args)
+		got, err := parseUpArgs(c.args, c.cfg)
 		if err != nil || got != c.want {
-			t.Errorf("%v: got %+v %v", c.args, got, err)
+			t.Errorf("%v %v: got %+v %v", c.args, c.cfg, got, err)
 		}
 	}
 	bad := [][]string{
-		{"--h", "0", "dir"}, {"--h", "169", "dir"}, {"--h", "1.5", "dir"}, {"--h", "abc", "dir"},
-		{"--h"}, {"dir", "--h"}, {}, {"a", "b"}, {"-x", "dir"},
-		{"-n"}, {"dir", "-n"}, {"-n", "", "dir"}, {"-n=", "dir"}, {"-n", "a b", "dir"},
-		{"-n", strings.Repeat("a", 65), "dir"}, {"-n", "한글", "dir"}, {"-n", "a.b", "dir"},
+		{"-h", "0", "dir"}, {"-h", "169", "dir"}, {"-h", "1.5", "dir"}, {"-h", "abc", "dir"}, {"-h", "", "dir"},
+		{"-h"}, {"dir", "-h"}, {}, {"a", "b"}, {"-x", "dir"},
+		{"-t"}, {"dir", "-t"}, {"-t", "a b", "dir"},
+		{"-t", strings.Repeat("a", 65), "dir"}, {"-t", "한글", "dir"}, {"-t", "a.b", "dir"},
+		// old option names are gone
+		{"--h", "3", "dir"}, {"--h=3", "dir"}, {"-n", "x", "dir"}, {"-n=x", "dir"},
 	}
 	for _, args := range bad {
-		if _, err := parseUpArgs(args); err == nil {
+		if _, err := parseUpArgs(args, nil); err == nil {
 			t.Errorf("%v: expected error", args)
+		}
+	}
+	for _, c := range []map[string]string{{"hours": "500"}, {"hours": "x"}, {"tag": "a.b"}} {
+		if _, err := parseUpArgs([]string{"dir"}, c); err == nil || !strings.Contains(err.Error(), configPath()) {
+			t.Errorf("config %v: expected error naming the config file, got %v", c, err)
 		}
 	}
 }

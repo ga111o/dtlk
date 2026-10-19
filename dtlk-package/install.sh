@@ -133,14 +133,22 @@ else
   fi
 fi
 
-# 5) config
+# 5) config: replace server=, keep everything else (e.g. tag/hours set with `dtlk config`)
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/dtlk"
+CONFIG="$CONFIG_DIR/config"
 mkdir -p "$CONFIG_DIR"
-printf 'server=%s\n' "$SERVER" >"$CONFIG_DIR/config"
+rest=""
+if [ -f "$CONFIG" ]; then
+  rest="$(grep -v '^[[:space:]]*server[[:space:]]*=' "$CONFIG" || true)"
+fi
+{
+  printf 'server=%s\n' "$SERVER"
+  [ -z "$rest" ] || printf '%s\n' "$rest"
+} >"$CONFIG"
 
 say ""
 say "Installed: $DIR/dtlk ($("$DIR/dtlk" version))"
-say "Server: $SERVER  (config: $CONFIG_DIR/config)"
+say "Server: $SERVER  (config: $CONFIG)"
 case ":$PATH:" in
   *":$DIR:"*) ;;
   *) say "Note: $DIR is not in PATH. Add it to your shell profile (e.g. ~/.bashrc):"
@@ -148,5 +156,6 @@ case ":$PATH:" in
 esac
 say ""
 say "Usage:"
-say "  dtlk up <file-or-dir> [--h hours]"
+say "  dtlk up <file-or-dir> [-h hours] [-t tag]"
 say "  dtlk down <6-digit-code>"
+say "  dtlk config tag <tag>     (apply -t <tag> to every upload)"

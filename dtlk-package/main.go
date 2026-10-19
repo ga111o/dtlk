@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 )
 
@@ -13,18 +14,25 @@ var version = "dev"
 
 func usage() {
 	server, _ := serverURL()
+	defaults, err := effectiveConfig(configKeys)
+	if err != nil {
+		defaults = []string{"(cannot read config: " + err.Error() + ")"}
+	}
 	fmt.Fprintf(os.Stderr, `dtlk - Transfer files and folders with a 6-digit code
 
 Usage:
-  dtlk up [--h hours] [-n name] <file-or-dir>
-                                      Upload and print a 6-digit code (retention: default 24h, 1-168)
-                                      -n groups uploads under a name, listed at %s/files/<name>
+  dtlk up [-h hours] [-t tag] <file-or-dir>
+                                      Upload and print a 6-digit code (retention: 1-%d hours)
+                                      -t groups uploads under a tag, listed at %s/files/<tag>
+                                      -t "" uploads without the configured tag
   dtlk down <6-digit-code>            Download into the current directory
-  dtlk version                        Print version
+  dtlk config [key [value]]           Show or set defaults (keys: %s; "" unsets)
+  dtlk -v | version                   Print version
+  dtlk -help | help                   Show this help
 
-Server: %s
-  (config: %s, override with DTLK_SERVER)
-`, server, server, configPath())
+Defaults (config: %s, DTLK_SERVER overrides server):
+  %s
+`, maxHours, server, strings.Join(configKeys, ", "), configPath(), strings.Join(defaults, "\n  "))
 }
 
 func main() {
@@ -46,10 +54,12 @@ func run(args []string) int {
 		err = cmdUp(ctx, args[1:])
 	case "down":
 		err = cmdDown(ctx, args[1:])
-	case "version", "--version":
+	case "config":
+		err = cmdConfig(args[1:])
+	case "version", "-v":
 		fmt.Println(version)
 		return 0
-	case "help", "-h", "--help":
+	case "help", "-help":
 		usage()
 		return 0
 	default:

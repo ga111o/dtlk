@@ -6,7 +6,7 @@ x-app: &app
     dockerfile: dtlk-server/Dockerfile
     target: runtime
     args:
-      GIT_SHA: ${GIT_SHA:-dev}
+      DTLK_VERSION: ${DTLK_VERSION:-dev}
   restart: unless-stopped
 
 services:
