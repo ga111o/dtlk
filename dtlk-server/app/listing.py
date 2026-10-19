@@ -8,6 +8,7 @@ import html
 import sqlite3
 import time
 from string import Template
+from urllib.parse import quote
 
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 
@@ -36,7 +37,7 @@ def when(ts: float) -> str:
 
 
 def _display_name(row: sqlite3.Row) -> str:
-    return row["name"] + ("/" if row["kind"] == "dir" else "")
+    return row["name"] + ("/" if row["kind"] != "file" else "")
 
 
 def render(tag: str, rows: list[sqlite3.Row], as_html: bool) -> Response:
@@ -57,6 +58,30 @@ def render(tag: str, rows: list[sqlite3.Row], as_html: bool) -> Response:
         f"<tr><th>Name</th><th>Expires</th><th>Code</th></tr>\n{trs}\n</table>"
     )
     return HTMLResponse(PAGE.substitute(title=html.escape(tag), body=body), headers=HEADERS)
+
+
+def render_bundle(code: str, name: str, items: list[dict[str, str]], expires_at: float, origin: str) -> Response:
+    """The browser page of a bundle: a hidden frame per item starts its download, the links are a fallback."""
+    trs: list[str] = []
+    frames: list[str] = []
+    for it in items:
+        href = f"/{code}/{quote(it['name'], safe='')}"
+        folder = it["kind"] == "dir"
+        trs.append(
+            f'<tr><td><a href="{href}">{html.escape(it["name"] + ("/" if folder else ""))}</a></td>'
+            f"<td>{html.escape(it['name'] + ('.zip' if folder else ''))}</td></tr>"
+        )
+        frames.append(f'<iframe src="{href}" width="0" height="0" frameborder="0"></iframe>')
+    body = (
+        f"<h1>{html.escape(name)}/</h1>\n"
+        f"<p>{len(items)} items, expires {when(expires_at)}. Each item downloads on its own: "
+        "if the browser asks, allow multiple downloads, or click the links.</p>\n"
+        '<table border="1" cellpadding="6" cellspacing="0">\n'
+        "<tr><th>Item</th><th>Saved as</th></tr>\n" + "\n".join(trs) + "\n</table>\n"
+        f"<p>CLI: <code>dtlk down {code}</code> or <code>curl -s {html.escape(origin)}/{code} | tar x</code></p>\n"
+        + "\n".join(frames)
+    )
+    return HTMLResponse(PAGE.substitute(title=html.escape(name), body=body), headers=HEADERS)
 
 
 def render_error(exc: ApiError, as_html: bool) -> Response:

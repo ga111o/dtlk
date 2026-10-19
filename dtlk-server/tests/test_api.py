@@ -3,6 +3,7 @@ import os
 import re
 import sqlite3
 import stat
+import tarfile
 import zipfile
 from datetime import datetime
 
@@ -239,6 +240,103 @@ def test_browser_download_folder_as_zip(env):
     assert stat.S_ISLNK(link.external_attr >> 16) and zf.read(link) == b"hello/world/text1.txt"
 
 
+BUNDLE = "dtlk-261019-143005"
+BUNDLE_ITEMS = [{"name": "linear algebra 3.pdf", "kind": "file"}, {"name": "notes", "kind": "dir"}]
+
+
+def upload_bundle(env, tag: str | None = None) -> str:
+    data = make_archive(
+        {
+            f"{BUNDLE}/": None,
+            f"{BUNDLE}/linear algebra 3.pdf": b"%PDF three",
+            f"{BUNDLE}/notes/": None,
+            f"{BUNDLE}/notes/a.txt": b"a",
+            f"{BUNDLE}/notes/empty/": None,
+        },
+        links={f"{BUNDLE}/notes/link": "a.txt"},
+    )
+    return upload(env.public, data, name=BUNDLE, kind="bundle", tag=tag, items=BUNDLE_ITEMS)["code"]
+
+
+@pytest.mark.parametrize(
+    "kind,items",
+    [
+        ("bundle", None),
+        ("bundle", []),
+        ("bundle", [{"name": "a", "kind": "file"}]),
+        ("bundle", [{"name": "a", "kind": "file"}, {"name": "a", "kind": "dir"}]),
+        ("bundle", [{"name": "a", "kind": "file"}, {"name": "b/c", "kind": "file"}]),
+        ("bundle", [{"name": "a", "kind": "file"}, {"name": "..", "kind": "dir"}]),
+        ("bundle", [{"name": "a", "kind": "file"}, {"name": "b", "kind": "bundle"}]),
+        ("dir", [{"name": "a", "kind": "file"}, {"name": "b", "kind": "file"}]),
+        ("folder", None),
+    ],
+)
+def test_bad_bundles_rejected(env, kind, items):
+    body = {"name": BUNDLE, "kind": kind, "estimated_size": 10, "items": items}
+    assert env.public.post("/api/uploads", json=body).status_code == 400
+
+
+def test_bundle_info_and_page(env):
+    code = upload_bundle(env, tag="bun")
+    info = env.public.get(f"/api/files/{code}").json()
+    assert info["name"] == BUNDLE and info["kind"] == "bundle" and info["items"] == BUNDLE_ITEMS
+    assert "items" not in env.public.get(f"/api/files/{upload(env.public, make_archive({'a': b''}), name='a', kind='file')['code']}").json()
+
+    r = env.public.get(f"/{code}", headers={"Accept": "text/html,*/*"})
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/html")
+    page = r.text
+    assert "<style" not in page and "<script" not in page and "style=" not in page  # plain HTML for old browsers
+    for href in (f"/{code}/linear%20algebra%203.pdf", f"/{code}/notes"):
+        assert f'<iframe src="{href}" width="0" height="0" frameborder="0"></iframe>' in page
+        assert f'<a href="{href}">' in page
+    assert "notes.zip" in page and f"curl -s https://dtlk.example.test/{code} | tar x" in page
+    assert f"{BUNDLE}/" in env.public.get("/files/bun").text
+
+
+def test_bundle_items_download_separately(env):
+    code = upload_bundle(env)
+    r = env.public.get(f"/{code}/linear algebra 3.pdf")
+    assert r.status_code == 200 and r.content == b"%PDF three"
+    assert r.headers["content-type"] == "application/pdf" and r.headers["content-length"] == "10"
+    assert r.headers["content-disposition"].startswith('attachment; filename="linear algebra 3.pdf";')
+
+    r = env.public.get(f"/{code}/notes")
+    assert r.status_code == 200 and r.headers["content-type"] == "application/zip"
+    assert 'filename="notes.zip"' in r.headers["content-disposition"]
+    zf = zipfile.ZipFile(io.BytesIO(r.content))
+    assert set(zf.namelist()) == {"notes/", "notes/a.txt", "notes/empty/", "notes/link"}
+    assert zf.read("notes/a.txt") == b"a"
+
+    for path in (f"/{code}/{BUNDLE}", f"/{code}/a.txt", f"/{code}/..%2Fx"):
+        assert env.public.get(path).status_code == 404
+    single = upload(env.public, make_archive({"test1/": None, "test1/a": b""}))["code"]
+    assert env.public.get(f"/{single}/a").status_code == 404
+
+
+def test_bundle_unpacks_with_curl_and_tar(env, tmp_path):
+    code = upload_bundle(env)
+    r = env.public.get(f"/{code}")  # curl's Accept: */*
+    assert r.status_code == 200 and r.headers["content-type"] == "application/x-tar"
+    assert f'filename="{BUNDLE}.tar"' in r.headers["content-disposition"]
+    with tarfile.open(fileobj=io.BytesIO(r.content)) as tf:
+        names = [m.name for m in tf]
+        tf.extractall(tmp_path, filter="data")
+    assert names == ["linear algebra 3.pdf", "notes", "notes/a.txt", "notes/empty", "notes/link"]
+    assert (tmp_path / "linear algebra 3.pdf").read_bytes() == b"%PDF three"
+    assert (tmp_path / "notes/a.txt").read_bytes() == b"a" and (tmp_path / "notes/empty").is_dir()
+    assert os.readlink(tmp_path / "notes/link") == "a.txt"
+
+
+def test_bundle_tar_keeps_long_names(env):
+    long_name = "아주 긴 한글 파일 이름 " * 6 + ".txt"  # over 100 bytes: needs a PAX path
+    data = make_archive({f"{BUNDLE}/": None, f"{BUNDLE}/{long_name}": b"k", f"{BUNDLE}/b": b"b"})
+    items = [{"name": long_name, "kind": "file"}, {"name": "b", "kind": "file"}]
+    code = upload(env.public, data, name=BUNDLE, kind="bundle", items=items)["code"]
+    tf = tarfile.open(fileobj=io.BytesIO(env.public.get(f"/{code}").content))
+    assert {m.name: tf.extractfile(m).read() for m in tf} == {long_name: b"k", "b": b"b"}
+
+
 def test_unknown_paths_are_404_and_not_counted(env):
     c = env.client("10.3.3.3")
     for _ in range(25):
@@ -361,7 +459,7 @@ def test_old_database_is_migrated(tmp_path):
 
     db = DB(path)
     for table in ("uploads", "files"):
-        assert "tag" in {r["name"] for r in db.conn.execute(f"PRAGMA table_info({table})")}
+        assert {"tag", "items"} <= {r["name"] for r in db.conn.execute(f"PRAGMA table_info({table})")}
     assert db.conn.execute("SELECT name FROM sqlite_master WHERE name = 'files_tag'").fetchone()
     assert db.conn.execute("SELECT name, tag FROM files").fetchone()[:] == ("a.txt", None)
     DB(path)  # running the migration again is a no-op

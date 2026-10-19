@@ -1,6 +1,6 @@
 // Runs upload.js's packer under node for test_web.py. Reads a JSON spec on stdin:
 //   {wasm, part_size, now, roots, items: [{path, dir} | {path, data (base64), mtime}]}
-// and prints {name, kind, tar_size, estimate, parts (base64)}; or {uniq: [[name, dir]...]}
+// and prints {name, kind, items, tar_size, estimate, parts (base64)}; or {uniq: [[name, dir]...]}
 // prints the names uniq() picks.
 const fs = require('fs');
 const path = require('path');
@@ -40,7 +40,7 @@ function run(zstd) {
         parts.push(Buffer.from(buf).toString('base64'));
         next();
       }, fail),
-    () => process.stdout.write(JSON.stringify({name: b.name, kind: b.kind, tar_size: t.size, estimate: DTLK.estimate(t.size), parts})),
+    () => process.stdout.write(JSON.stringify({name: b.name, kind: b.kind, items: b.items, tar_size: t.size, estimate: DTLK.estimate(t.size), parts})),
     fail,
   );
 }

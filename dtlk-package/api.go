@@ -156,12 +156,20 @@ func (c *apiClient) postJSON(ctx context.Context, path string, in, out any) erro
 	return c.doJSON(req, out)
 }
 
+// bundleItem is one top-level entry of a bundle (kind "bundle"): a folder
+// of several uploaded paths that dtlk down unpacks in place.
+type bundleItem struct {
+	Name string `json:"name"`
+	Kind string `json:"kind"` // "file" or "dir"
+}
+
 type createUploadReq struct {
-	Name          string `json:"name"`
-	Kind          string `json:"kind"`
-	EstimatedSize int64  `json:"estimated_size"`
-	Hours         int    `json:"hours"`
-	Tag           string `json:"tag,omitempty"`
+	Name          string       `json:"name"`
+	Kind          string       `json:"kind"`
+	EstimatedSize int64        `json:"estimated_size"`
+	Hours         int          `json:"hours"`
+	Tag           string       `json:"tag,omitempty"`
+	Items         []bundleItem `json:"items,omitempty"`
 }
 
 type createUploadResp struct {
@@ -177,10 +185,11 @@ type completeResp struct {
 }
 
 type fileInfo struct {
-	Name      string    `json:"name"`
-	Kind      string    `json:"kind"`
-	Size      int64     `json:"size"`
-	ExpiresAt time.Time `json:"expires_at"`
+	Name      string       `json:"name"`
+	Kind      string       `json:"kind"`
+	Size      int64        `json:"size"`
+	ExpiresAt time.Time    `json:"expires_at"`
+	Items     []bundleItem `json:"items"`
 }
 
 func (c *apiClient) createUpload(ctx context.Context, r createUploadReq) (*createUploadResp, error) {

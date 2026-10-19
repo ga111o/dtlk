@@ -1,5 +1,6 @@
 package com.ga111o.dtlk
 
+import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 import java.io.IOException
@@ -51,13 +52,24 @@ class Api(val base: String, private val userAgent: String) {
     @Volatile
     private var canceled: String? = null
 
-    fun createUpload(name: String, kind: String, estimatedSize: Long, hours: Int, tag: String): CreatedUpload {
+    /** items: the file names in a bundle (kind "bundle"), empty otherwise. */
+    fun createUpload(
+        name: String,
+        kind: String,
+        estimatedSize: Long,
+        hours: Int,
+        tag: String,
+        items: List<String> = emptyList(),
+    ): CreatedUpload {
         val body = JSONObject()
             .put("name", name)
             .put("kind", kind)
             .put("estimated_size", estimatedSize)
             .put("hours", hours)
         if (tag.isNotEmpty()) body.put("tag", tag)
+        if (items.isNotEmpty()) {
+            body.put("items", JSONArray(items.map { JSONObject().put("name", it).put("kind", "file") }))
+        }
         val res = json(request("POST", "/api/uploads", body.toString().toByteArray(), "application/json", CALL_TIMEOUT_MS))
         return try {
             CreatedUpload(res.getString("upload_id"), res.getInt("chunk_size"), res.getLong("max_size"))

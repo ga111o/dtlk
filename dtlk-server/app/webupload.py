@@ -69,7 +69,7 @@ def _uniq(name: str, used: set[str]) -> str:
 
 
 def _archive(files: list[tuple[str, bytes]], now: float) -> tuple[str, str, bytes]:
-    """name, kind and tar.zst of the posted files; several go into a dtlk-yymmdd-hhmmss folder."""
+    """name, kind and tar.zst of the posted files; several go into a dtlk-yymmdd-hhmmss bundle."""
     bundle = len(files) > 1
     top = time.strftime("dtlk-%y%m%d-%H%M%S", time.localtime(now)) if bundle else files[0][0]
     raw = io.BytesIO()
@@ -82,12 +82,13 @@ def _archive(files: list[tuple[str, bytes]], now: float) -> tuple[str, str, byte
             info = tarfile.TarInfo(f"{top}/{name}" if bundle else name)
             info.size, info.mode, info.mtime = len(data), 0o644, int(now)
             tf.addfile(info, io.BytesIO(data))
-    return top, "dir" if bundle else "file", zstd.compress(raw.getvalue())
+    return top, "bundle" if bundle else "file", zstd.compress(raw.getvalue())
 
 
 def _store(svc: Service, ip: str, files: list[tuple[str, bytes]], hours: int, tag: str | None) -> dict[str, Any]:
     name, kind, data = _archive(files, svc.clock())
-    up = svc.create_upload(ip, name, kind, len(data), hours, tag)
+    items = [{"name": n, "kind": "file"} for n, _ in files] if kind == "bundle" else None
+    up = svc.create_upload(ip, name, kind, len(data), hours, tag, items)
     try:
         step = up["chunk_size"]
         for i in range(0, len(data), step):
@@ -96,7 +97,7 @@ def _store(svc: Service, ip: str, files: list[tuple[str, bytes]], hours: int, ta
     except BaseException:
         svc.abort_upload(up["upload_id"])
         raise
-    return {**res, "name": name + ("/" if kind == "dir" else ""), "raw": sum(len(d) for _, d in files)}
+    return {**res, "name": name + ("/" if kind == "bundle" else ""), "raw": sum(len(d) for _, d in files)}
 
 
 def _result(cfg: Config, res: dict[str, Any], tag: str | None) -> Response:

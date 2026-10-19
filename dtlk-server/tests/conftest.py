@@ -91,9 +91,15 @@ def make_archive(entries: dict[str, bytes | None], links: dict[str, str] | None 
 
 
 def upload(
-    client: TestClient, data: bytes, name: str = "test1", kind: str = "dir", hours: int = 24, tag: str | None = None
+    client: TestClient,
+    data: bytes,
+    name: str = "test1",
+    kind: str = "dir",
+    hours: int = 24,
+    tag: str | None = None,
+    items: list[dict] | None = None,
 ) -> dict:
-    body = {"name": name, "kind": kind, "estimated_size": len(data), "hours": hours, "tag": tag}
+    body = {"name": name, "kind": kind, "estimated_size": len(data), "hours": hours, "tag": tag, "items": items}
     r = client.post("/api/uploads", json=body)
     assert r.status_code == 200, r.text
     upload_id = r.json()["upload_id"]

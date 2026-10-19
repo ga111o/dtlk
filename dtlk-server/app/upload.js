@@ -206,13 +206,18 @@ var DTLK = (function () {
       '-' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
   }
 
-  // One top-level item stays as it is; several go into a dtlk-yymmdd-hhmmss folder.
-  // items: [{path, dir, file}]; roots: their distinct top-level names in order.
+  // One top-level item stays as it is; several go into a dtlk-yymmdd-hhmmss bundle,
+  // which downloads unpacked. items: [{path, dir, file}]; roots: their distinct
+  // top-level names in order, each also an item's path.
   function bundle(items, roots, now) {
     var b = {name: roots[0], kind: items[0].dir ? 'dir' : 'file', entries: items, size: 0};
     if (roots.length > 1) {
+      var dirs = {};
+      for (var k = 0; k < items.length; k++) if (items[k].dir) dirs['$' + items[k].path] = true;
       b.name = stamp(now);
-      b.kind = 'dir';
+      b.kind = 'bundle';
+      b.items = [];
+      for (var r = 0; r < roots.length; r++) b.items.push({name: roots[r], kind: dirs['$' + roots[r]] ? 'dir' : 'file'});
       b.entries = [{path: b.name, dir: true}];
       for (var i = 0; i < items.length; i++) {
         b.entries.push({path: b.name + '/' + items[i].path, dir: items[i].dir, file: items[i].file});
@@ -364,6 +369,7 @@ if (typeof document !== 'undefined') (function () {
     }
     var body = {name: job.name, kind: job.kind, estimated_size: DTLK.estimate(t.size), hours: job.hours};
     if (job.tag) body.tag = job.tag;
+    if (job.items) body.items = job.items;
     send('POST', '/api/uploads', body, function (err, up) {
       if (err) return fail(err);
       if (over) return send('DELETE', '/api/uploads/' + up.upload_id, null, function () {});
@@ -394,7 +400,7 @@ if (typeof document !== 'undefined') (function () {
   }
 
   function label(job) {
-    return job.name + (job.kind === 'dir' ? '/' : '') + ' (' + DTLK.human(job.size) + ')';
+    return job.name + (job.kind !== 'file' ? '/' : '') + ' (' + DTLK.human(job.size) + ')';
   }
 
   function localTime(iso) {
@@ -429,7 +435,7 @@ if (typeof document !== 'undefined') (function () {
       }
       td.appendChild(node);
     }
-    row('Name', job.name + (job.kind === 'dir' ? '/' : ''));
+    row('Name', job.name + (job.kind !== 'file' ? '/' : ''));
     row('Code', res.code);
     row('Expires', localTime(res.expires_at));
     row('Size', DTLK.human(job.size) + ' \u2192 ' + DTLK.human(stored) + (job.zstd ? ' (zstd)' : ' (not compressed)'));
@@ -488,6 +494,7 @@ if (typeof document !== 'undefined') (function () {
     var b = DTLK.bundle(items, roots, new Date());
     job.name = b.name;
     job.kind = b.kind;
+    job.items = b.items;
     job.entries = b.entries;
     job.size = b.size;
     say(job.line, label(job) + ': waiting');

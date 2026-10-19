@@ -68,14 +68,18 @@ func splitExt(name string) (stem, ext string) {
 	return name[:len(name)-len(ext)], ext
 }
 
-// freeName suggests "test1 (1)" / "text1 (1).txt", the first one not taken in dir.
-func freeName(dir, name string, isDir bool) string {
+// freeName suggests "test1 (1)" / "text1 (1).txt", the first one not taken
+// in dir or by used.
+func freeName(dir, name string, isDir bool, used map[string]bool) string {
 	stem, ext := name, ""
 	if !isDir {
 		stem, ext = splitExt(name)
 	}
 	for i := 1; ; i++ {
 		cand := fmt.Sprintf("%s (%d)%s", stem, i, ext)
+		if used[cand] {
+			continue
+		}
 		if ok, err := exists(filepath.Join(dir, cand)); err == nil && !ok {
 			return cand
 		}
@@ -84,8 +88,9 @@ func freeName(dir, name string, isDir bool) string {
 
 // resolveTarget picks the name to save a download as inside dir. If name is
 // taken it asks y (overwrite) / n (enter a new name); without a prompter
-// (not a terminal) it fails without touching anything.
-func resolveTarget(dir, name string, isDir bool, p *prompter) (target string, overwrite bool, err error) {
+// (not a terminal) it fails without touching anything. A new name may not be
+// one of used: the other items saved by the same download.
+func resolveTarget(dir, name string, isDir bool, used map[string]bool, p *prompter) (target string, overwrite bool, err error) {
 	target = name
 	for {
 		taken, err := exists(filepath.Join(dir, target))
@@ -106,7 +111,7 @@ func resolveTarget(dir, name string, isDir bool, p *prompter) (target string, ov
 		case "y", "yes":
 			return target, true, nil
 		case "n", "no":
-			def := freeName(dir, target, isDir)
+			def := freeName(dir, target, isDir, used)
 			for {
 				in, err := p.ask(fmt.Sprintf("New name [%s]: ", def))
 				if err != nil {
@@ -117,6 +122,10 @@ func resolveTarget(dir, name string, isDir bool, p *prompter) (target string, ov
 				}
 				if err := validName(in); err != nil {
 					fmt.Fprintln(p.out, err)
+					continue
+				}
+				if used[in] {
+					fmt.Fprintf(p.out, "'%s' is another item of this download.\n", in)
 					continue
 				}
 				target = in

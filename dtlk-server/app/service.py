@@ -1,3 +1,4 @@
+import json
 import logging
 import math
 import re
@@ -16,8 +17,9 @@ from .storage import Storage
 
 log = logging.getLogger("dtlk")
 
-KINDS = ("file", "dir")
+KINDS = ("file", "dir", "bundle")  # a bundle is a folder of several uploaded items, unpacked on download
 MAX_PARTS = 10000
+MAX_ITEMS = 10000
 TAG_RE = re.compile(r"[a-z0-9_-]{1,64}")
 
 
@@ -49,6 +51,20 @@ def valid_name(name: str) -> bool:
         and "/" not in name
         and "\x00" not in name
     )
+
+
+def check_items(items: list[dict[str, str]] | None) -> str:
+    """A bundle's items (its top-level entries, [{name, kind}]) as stored JSON."""
+    if not items or not 2 <= len(items) <= MAX_ITEMS:
+        raise ApiError(400, f"A bundle needs 2-{MAX_ITEMS} items")
+    names = set()
+    for it in items:
+        if not valid_name(it["name"]) or it["name"] in names:
+            raise ApiError(400, "Invalid or duplicate item name")
+        if it["kind"] not in ("file", "dir"):
+            raise ApiError(400, "Item kind must be 'file' or 'dir'")
+        names.add(it["name"])
+    return json.dumps([{"name": it["name"], "kind": it["kind"]} for it in items], ensure_ascii=False)
 
 
 class Service:
@@ -93,12 +109,25 @@ class Service:
     # ---- uploads --------------------------------------------------------
 
     def create_upload(
-        self, ip: str, name: str, kind: str, estimated_size: int, hours: int, tag: str | None = None
+        self,
+        ip: str,
+        name: str,
+        kind: str,
+        estimated_size: int,
+        hours: int,
+        tag: str | None = None,
+        items: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
         if not valid_name(name):
             raise ApiError(400, "Invalid file name")
         if kind not in KINDS:
-            raise ApiError(400, "kind must be 'file' or 'dir'")
+            raise ApiError(400, "kind must be 'file', 'dir' or 'bundle'")
+        if kind == "bundle":
+            items_json: str | None = check_items(items)
+        elif items is not None:
+            raise ApiError(400, "Only a bundle has items")
+        else:
+            items_json = None
         if tag is not None:
             tag = tag.lower()
             if not TAG_RE.fullmatch(tag):
@@ -127,9 +156,9 @@ class Service:
             else:
                 self._check_cap(c, now, reserve, s["storage_cap_bytes"])
                 c.execute(
-                    "INSERT INTO uploads (id, ip, name, kind, hours, reserved, object_key, tag, created_at, updated_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (upload_id, ip, name, kind, hours, reserve, key, tag, now, now),
+                    "INSERT INTO uploads (id, ip, name, kind, items, hours, reserved, object_key, tag, created_at, updated_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (upload_id, ip, name, kind, items_json, hours, reserve, key, tag, now, now),
                 )
                 c.execute("INSERT INTO upload_starts (ip, ts) VALUES (?, ?)", (ip, now))
         if error:
@@ -235,9 +264,9 @@ class Service:
                 if not c.execute("SELECT 1 FROM files WHERE code = ?", (code,)).fetchone():
                     break
             c.execute(
-                "INSERT INTO files (code, object_key, name, kind, size, ip, tag, created_at, expires_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (code, row["object_key"], row["name"], row["kind"], size, row["ip"], row["tag"], now, expires_at),
+                "INSERT INTO files (code, object_key, name, kind, items, size, ip, tag, created_at, expires_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (code, row["object_key"], row["name"], row["kind"], row["items"], size, row["ip"], row["tag"], now, expires_at),
             )
             c.execute("DELETE FROM upload_parts WHERE upload_id = ?", (upload_id,))
             c.execute("DELETE FROM uploads WHERE id = ?", (upload_id,))

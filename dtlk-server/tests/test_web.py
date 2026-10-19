@@ -72,11 +72,12 @@ def test_form_files_are_bundled(env):
     r = post_form(env.public, [("a.txt", b"one"), ("a.txt", b"two"), ("b", b"three")])
     code = code_of(r)
     info = env.public.get(f"/api/files/{code}").json()
-    assert info["kind"] == "dir" and re.fullmatch(r"dtlk-\d{6}-\d{6}", info["name"])
+    assert info["kind"] == "bundle" and re.fullmatch(r"dtlk-\d{6}-\d{6}", info["name"])
+    assert info["items"] == [{"name": n, "kind": "file"} for n in ("a.txt", "a (2).txt", "b")]
     assert f"{info['name']}/" in r.text
-    zf = zipfile.ZipFile(io.BytesIO(env.public.get(f"/{code}").content))
-    top = info["name"]
-    assert zf.read(f"{top}/a.txt") == b"one" and zf.read(f"{top}/a (2).txt") == b"two" and zf.read(f"{top}/b") == b"three"
+    assert env.public.get(f"/{code}/a (2).txt").content == b"two"
+    tf = tarfile.open(fileobj=io.BytesIO(env.public.get(f"/{code}").content))
+    assert {m.name: tf.extractfile(m).read() for m in tf} == {"a.txt": b"one", "a (2).txt": b"two", "b": b"three"}
 
 
 def test_form_tag_and_hours(env):
@@ -200,9 +201,12 @@ def test_js_items_are_bundled(env):
     items = [{"path": "a.txt", "data": b"a"}, {"path": "b", "dir": True}, {"path": "b/c.txt", "data": b"c"}]
     out, data = pack(None, ["a.txt", "b"], items, env.clock())
     top = out["name"]
-    assert out["kind"] == "dir" and re.fullmatch(r"dtlk-\d{6}-\d{6}", top)
+    assert out["kind"] == "bundle" and re.fullmatch(r"dtlk-\d{6}-\d{6}", top)
+    assert out["items"] == [{"name": "a.txt", "kind": "file"}, {"name": "b", "kind": "dir"}]
     names = [m.name for m in tarfile.open(fileobj=io.BytesIO(zstd.decompress(data)))]
     assert names == [top, f"{top}/a.txt", f"{top}/b", f"{top}/b/c.txt"]
+    code = upload(env.public, data, name=top, kind=out["kind"], items=out["items"])["code"]
+    assert env.public.get(f"/{code}/a.txt").content == b"a"
 
 
 @needs_node

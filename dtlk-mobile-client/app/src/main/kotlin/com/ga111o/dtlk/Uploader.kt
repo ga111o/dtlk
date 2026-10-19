@@ -22,14 +22,24 @@ class UploadError(message: String) : Exception(message)
 /** One shared item; open() must yield exactly size bytes. */
 class Source(val name: String, val size: Long, val mtime: Long, val open: () -> InputStream)
 
-/** What goes to the server: name and kind for /api/uploads, and the archive members. */
-class Archive(val name: String, val kind: String, val entries: List<Entry>, val bytes: Long) {
-    val label: String get() = name + if (kind == "dir") "/" else ""
+/**
+ * What goes to the server: name, kind and (for a bundle) the item names for
+ * /api/uploads, and the archive members.
+ */
+class Archive(
+    val name: String,
+    val kind: String,
+    val entries: List<Entry>,
+    val bytes: Long,
+    val items: List<String> = emptyList(),
+) {
+    val label: String get() = name + if (kind != "file") "/" else ""
 
     companion object {
         /**
-         * One item stays as it is; several go into a <stamp> folder (stamp is
-         * dtlk-yymmdd-hhmmss), like the web upload page. Names must differ.
+         * One item stays as it is; several go into a <stamp> bundle (stamp is
+         * dtlk-yymmdd-hhmmss) that downloads unpacked, like the web upload page.
+         * Names must differ.
          */
         fun of(items: List<Source>, stamp: String, now: Long): Archive {
             if (items.isEmpty()) throw UploadError("Nothing to upload")
@@ -45,7 +55,7 @@ class Archive(val name: String, val kind: String, val entries: List<Entry>, val 
             }
             val entries = listOf(Entry(stamp, true, mtime = now)) +
                 items.map { Entry("$stamp/${it.name}", false, it.size, it.mtime, it.open) }
-            return Archive(stamp, "dir", entries, bytes)
+            return Archive(stamp, "bundle", entries, bytes, items.map { it.name })
         }
     }
 }
@@ -81,7 +91,7 @@ class Uploader(private val api: Api, private val backoff: (Int) -> Long = ::back
     /** progress(fileBytesRead, totalFileBytes) is called from the calling thread. */
     fun run(b: Archive, hours: Int, tag: String, now: Long, progress: (Long, Long) -> Unit): Completed {
         val tarSize = Tar.size(b.entries)
-        val up = api.createUpload(b.name, b.kind, tarSize + tarSize / 100 + (1 shl 20), hours, tag)
+        val up = api.createUpload(b.name, b.kind, tarSize + tarSize / 100 + (1 shl 20), hours, tag, b.items)
         try {
             send(up, b, now, progress)
             return api.complete(up.id)

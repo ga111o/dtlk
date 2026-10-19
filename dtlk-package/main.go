@@ -21,9 +21,10 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `dtlk - Transfer files and folders with a 6-digit code
 
 Usage:
-  dtlk up [-h hours] [-t tag] <file-or-dir>
+  dtlk up [-h hours] [-t tag] <file-or-dir>...
                                       Upload, print a 6-digit code and copy its web URL to the clipboard
                                       (retention: 1-%d hours)
+                                      Several paths go up as one code (names must differ) and download unpacked
                                       -t groups uploads under a tag, listed at %s/files/<tag>
                                       -t "" uploads without the configured tag
   dtlk down [server/]<6-digit-code>   Download into the current directory

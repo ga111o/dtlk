@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -43,21 +44,20 @@ func parseTag(s string) (string, error) {
 type upOpts struct {
 	hours int
 	tag   string
-	path  string
+	paths []string
 }
 
-// parseUpArgs accepts "-h N" / "-h=N" and "-t TAG" / "-t=TAG" anywhere around a single path.
+// parseUpArgs accepts "-h N" / "-h=N" and "-t TAG" / "-t=TAG" anywhere around one or more paths.
 // An option that is not given falls back to cfg (the config file), then to the built-in default.
 // An empty tag (-t "" or -t=) uploads without one, even when cfg has a tag.
 func parseUpArgs(args []string, cfg map[string]string) (o upOpts, err error) {
-	var paths []string
 	var hoursSet, tagSet bool
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		flag, val, hasVal := strings.Cut(a, "=")
 		switch {
 		case a == "--":
-			paths = append(paths, args[i+1:]...)
+			o.paths = append(o.paths, args[i+1:]...)
 			i = len(args)
 		case flag == "-h" || flag == "-t":
 			if !hasVal {
@@ -83,13 +83,12 @@ func parseUpArgs(args []string, cfg map[string]string) (o upOpts, err error) {
 		case strings.HasPrefix(a, "-") && a != "-":
 			return upOpts{}, usageErrorf("unknown option: %s", a)
 		default:
-			paths = append(paths, a)
+			o.paths = append(o.paths, a)
 		}
 	}
-	if len(paths) != 1 {
-		return upOpts{}, usageErrorf("usage: dtlk up [-h hours] [-t tag] <file-or-dir>")
+	if len(o.paths) == 0 {
+		return upOpts{}, usageErrorf("usage: dtlk up [-h hours] [-t tag] <file-or-dir>...")
 	}
-	o.path = paths[0]
 
 	if !hoursSet {
 		o.hours = defaultHours
@@ -107,6 +106,48 @@ func parseUpArgs(args []string, cfg map[string]string) (o upOpts, err error) {
 	return o, nil
 }
 
+// newBundle checks the paths given to dtlk up. One path is archived as itself;
+// several go into a dtlk-yymmdd-hhmmss bundle (local time now), like the web
+// upload page and the app do. Their names must differ.
+func newBundle(paths []string, now time.Time) (bundle, error) {
+	b := bundle{mtime: now}
+	seen := map[string]string{}
+	for _, path := range paths {
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			return bundle{}, err
+		}
+		info, err := os.Stat(abs)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return bundle{}, fmt.Errorf("path not found: %s", path)
+			}
+			return bundle{}, err
+		}
+		name := filepath.Base(abs)
+		if abs == "/" || validName(name) != nil {
+			return bundle{}, fmt.Errorf("cannot upload this path: %s", path)
+		}
+		kind := "file"
+		switch {
+		case info.IsDir():
+			kind = "dir"
+		case !info.Mode().IsRegular():
+			return bundle{}, fmt.Errorf("only regular files or directories can be uploaded: %s", path)
+		}
+		if prev, ok := seen[name]; ok {
+			return bundle{}, fmt.Errorf("duplicate name: %s (%s, %s)", name, prev, path)
+		}
+		seen[name] = path
+		b.srcs = append(b.srcs, source{abs, name, kind})
+	}
+	b.name, b.kind = b.srcs[0].name, b.srcs[0].kind
+	if len(b.srcs) > 1 {
+		b.name, b.kind = now.Format("dtlk-060102-150405"), "bundle"
+	}
+	return b, nil
+}
+
 func cmdUp(ctx context.Context, args []string) error {
 	cfg, err := readConfig()
 	if err != nil {
@@ -116,38 +157,20 @@ func cmdUp(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	hours, path := opts.hours, opts.path
-	abs, err := filepath.Abs(path)
+	hours := opts.hours
+	b, err := newBundle(opts.paths, time.Now())
 	if err != nil {
 		return err
-	}
-	info, err := os.Stat(abs)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("path not found: %s", path)
-		}
-		return err
-	}
-	name := filepath.Base(abs)
-	if abs == "/" || validName(name) != nil {
-		return fmt.Errorf("cannot upload this path: %s", path)
-	}
-	kind := "file"
-	switch {
-	case info.IsDir():
-		kind = "dir"
-	case !info.Mode().IsRegular():
-		return fmt.Errorf("only regular files or directories can be uploaded: %s", path)
 	}
 
-	scan, err := scanSource(abs, name)
+	scan, err := scanBundle(b)
 	if err != nil {
 		return fmt.Errorf("failed to scan files: %w", err)
 	}
-	if kind == "dir" {
-		fmt.Fprintf(os.Stderr, "%s/: %d files, %d dirs, %d symlinks, %s\n", name, scan.Files, scan.Dirs, scan.Links, humanBytes(scan.Bytes))
+	if b.kind != "file" {
+		fmt.Fprintf(os.Stderr, "%s/: %d files, %d dirs, %d symlinks, %s\n", b.name, scan.Files, scan.Dirs, scan.Links, humanBytes(scan.Bytes))
 	} else {
-		fmt.Fprintf(os.Stderr, "%s: %s\n", name, humanBytes(scan.Bytes))
+		fmt.Fprintf(os.Stderr, "%s: %s\n", b.name, humanBytes(scan.Bytes))
 	}
 
 	c, err := newAPIClient()
@@ -155,11 +178,12 @@ func cmdUp(ctx context.Context, args []string) error {
 		return err
 	}
 	up, err := c.createUpload(ctx, createUploadReq{
-		Name:          name,
-		Kind:          kind,
+		Name:          b.name,
+		Kind:          b.kind,
 		EstimatedSize: scan.TarSize + scan.TarSize/100 + 1<<20,
 		Hours:         hours,
 		Tag:           opts.tag,
+		Items:         b.items(),
 	})
 	if err != nil {
 		return err
@@ -176,7 +200,7 @@ func cmdUp(ctx context.Context, args []string) error {
 	}()
 
 	prog := startProgress("Uploading", scan.Bytes)
-	sent, err := uploadStream(ctx, c, up, abs, name, prog)
+	sent, err := uploadStream(ctx, c, up, b, prog)
 	prog.finish()
 	if err != nil {
 		return err
@@ -199,9 +223,9 @@ func cmdUp(ctx context.Context, args []string) error {
 	return nil
 }
 
-// uploadStream tars and zstd-compresses root on the fly and uploads it in
+// uploadStream tars and zstd-compresses b on the fly and uploads it in
 // chunk-sized parts, partWorkers at a time. It returns the compressed size.
-func uploadStream(ctx context.Context, c *apiClient, up *createUploadResp, root, top string, prog *progress) (int64, error) {
+func uploadStream(ctx context.Context, c *apiClient, up *createUploadResp, b bundle, prog *progress) (int64, error) {
 	parent := ctx
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
@@ -210,7 +234,7 @@ func uploadStream(ctx context.Context, c *apiClient, up *createUploadResp, root,
 	go func() {
 		zw, err := zstd.NewWriter(pw)
 		if err == nil {
-			err = writeTar(ctx, zw, root, top, prog.note, prog.add)
+			err = writeTar(ctx, zw, b, prog.note, prog.add)
 			if cerr := zw.Close(); err == nil {
 				err = cerr
 			}

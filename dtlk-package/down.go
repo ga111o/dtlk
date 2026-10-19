@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -74,7 +75,7 @@ func cmdDown(ctx context.Context, args []string) error {
 	if isTerminal(os.Stdin) {
 		p = &prompter{in: bufio.NewReader(os.Stdin), out: os.Stderr}
 	}
-	target, overwrite, err := resolveTarget(cwd, info.Name, info.Kind == "dir", p)
+	plan, err := planSaves(cwd, info, p)
 	if err != nil {
 		return err
 	}
@@ -105,18 +106,88 @@ func cmdDown(ctx context.Context, args []string) error {
 	if top != info.Name {
 		return fmt.Errorf("downloaded archive root (%q) does not match expected name (%q)", top, info.Name)
 	}
-
-	dst := filepath.Join(cwd, target)
-	if overwrite {
-		if err := os.RemoveAll(dst); err != nil {
-			return fmt.Errorf("failed to remove existing '%s': %w", target, err)
+	if info.Kind == "bundle" {
+		if err := checkItems(filepath.Join(tmp, top), info.Items); err != nil {
+			return err
 		}
-	} else if taken, err := exists(dst); err != nil || taken {
-		return fmt.Errorf("'%s' was created while downloading; please run again", target)
 	}
-	if err := os.Rename(filepath.Join(tmp, top), dst); err != nil {
+
+	for _, s := range plan {
+		if taken, err := exists(filepath.Join(cwd, s.to)); !s.overwrite && (err != nil || taken) {
+			return fmt.Errorf("'%s' was created while downloading; please run again", s.to)
+		}
+	}
+	for _, s := range plan {
+		dst := filepath.Join(cwd, s.to)
+		if s.overwrite {
+			if err := os.RemoveAll(dst); err != nil {
+				return fmt.Errorf("failed to remove existing '%s': %w", s.to, err)
+			}
+		}
+		if err := os.Rename(filepath.Join(tmp, filepath.FromSlash(s.from)), dst); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "Saved: ./%s\n", s.to)
+	}
+	return nil
+}
+
+// save is one top-level entry of a download: its path in the unpacked
+// archive and the name it is saved as in the current directory.
+type save struct {
+	from, to  string
+	overwrite bool
+}
+
+// planSaves picks where the download goes in dir before anything is fetched:
+// the upload as a whole, or each item of a bundle (unpacked in place).
+func planSaves(dir string, info *fileInfo, p *prompter) ([]save, error) {
+	if info.Kind != "bundle" {
+		to, overwrite, err := resolveTarget(dir, info.Name, info.Kind == "dir", nil, p)
+		if err != nil {
+			return nil, err
+		}
+		return []save{{info.Name, to, overwrite}}, nil
+	}
+	if len(info.Items) == 0 {
+		return nil, errors.New("server returned a bundle without items")
+	}
+	used := map[string]bool{}
+	for _, it := range info.Items {
+		if validName(it.Name) != nil || used[it.Name] {
+			return nil, fmt.Errorf("server returned an invalid item name: %q", it.Name)
+		}
+		used[it.Name] = true
+	}
+	plan := make([]save, 0, len(info.Items))
+	for _, it := range info.Items {
+		to, overwrite, err := resolveTarget(dir, it.Name, it.Kind == "dir", used, p)
+		if err != nil {
+			return nil, err
+		}
+		used[to] = true
+		plan = append(plan, save{info.Name + "/" + it.Name, to, overwrite})
+	}
+	return plan, nil
+}
+
+// checkItems makes sure the unpacked bundle at dir holds exactly items.
+func checkItems(dir string, items []bundleItem) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "Saved: ./%s\n", target)
+	want := map[string]bool{}
+	for _, it := range items {
+		want[it.Name] = true
+	}
+	if len(entries) != len(want) {
+		return errors.New("downloaded archive does not match its item list")
+	}
+	for _, e := range entries {
+		if !want[e.Name()] {
+			return fmt.Errorf("downloaded archive does not match its item list: unexpected %q", e.Name())
+		}
+	}
 	return nil
 }

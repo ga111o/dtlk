@@ -137,7 +137,10 @@ class UploaderTest {
         assertEquals((a.size + photo.size + text.size).toLong().let { it to it }, last)
         val c = server.created!!
         assertEquals(stamp, c.getString("name"))
-        assertEquals("dir", c.getString("kind"))
+        assertEquals("bundle", c.getString("kind"))
+        val items = c.getJSONArray("items")
+        assertEquals(listOf("a.bin", "사진 1.jpg", "$stamp.txt"), (0 until items.length()).map { items.getJSONObject(it).getString("name") })
+        assertEquals(setOf("file"), (0 until items.length()).map { items.getJSONObject(it).getString("kind") }.toSet())
         assertEquals(48, c.getInt("hours"))
         assertEquals("proj", c.getString("tag"))
         assertTrue(c.getLong("estimated_size") >= Tar.size(archive.entries))
@@ -159,6 +162,7 @@ class UploaderTest {
         assertEquals("a.txt", c.getString("name"))
         assertEquals("file", c.getString("kind"))
         assertFalse(c.has("tag"))
+        assertFalse(c.has("items"))
         assertEquals(listOf("a.txt"), server.unpack().keys.toList())
     }
 

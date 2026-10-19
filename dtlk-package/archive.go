@@ -14,7 +14,64 @@ import (
 )
 
 // Archives are plain tar streams whose entries all live under one top-level
-// name: the basename of what was uploaded ("test1/hello/world/text1.txt").
+// name: the basename of what was uploaded ("test1/hello/world/text1.txt"),
+// or a dtlk-yymmdd-hhmmss folder that holds several uploaded paths (kind
+// "bundle", unpacked in place on download).
+
+// source is one path given to dtlk up, its name in the archive and its kind ("file" or "dir").
+type source struct{ path, name, kind string }
+
+// bundle is what one dtlk up sends: a single source as itself, or several
+// sources inside a folder named name.
+type bundle struct {
+	name  string // top-level archive name
+	kind  string // "file", "dir" or "bundle"
+	srcs  []source
+	mtime time.Time // of the folder holding several sources
+}
+
+// items lists a bundle's sources for the server; nil for a single source.
+func (b bundle) items() []bundleItem {
+	if b.kind != "bundle" {
+		return nil
+	}
+	items := make([]bundleItem, len(b.srcs))
+	for i, s := range b.srcs {
+		items[i] = bundleItem{s.name, s.kind}
+	}
+	return items
+}
+
+// dirInfo describes the folder holding several sources, which exists only in the archive.
+type dirInfo struct {
+	name  string
+	mtime time.Time
+}
+
+func (d dirInfo) Name() string       { return d.name }
+func (d dirInfo) Size() int64        { return 0 }
+func (d dirInfo) Mode() fs.FileMode  { return fs.ModeDir | 0o755 }
+func (d dirInfo) ModTime() time.Time { return d.mtime }
+func (d dirInfo) IsDir() bool        { return true }
+func (d dirInfo) Sys() any           { return nil }
+
+// walk visits every entry of b in archive order (see walkSource). The folder
+// holding several sources comes first, with an empty path.
+func (b bundle) walk(fn func(path, name string, info fs.FileInfo) error) error {
+	prefix := ""
+	if b.kind == "bundle" {
+		if err := fn("", b.name, dirInfo{b.name, b.mtime}); err != nil {
+			return err
+		}
+		prefix = b.name + "/"
+	}
+	for _, s := range b.srcs {
+		if err := walkSource(s.path, prefix+s.name, fn); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 type scanResult struct {
 	Files, Dirs, Links, Skipped int
@@ -66,9 +123,9 @@ func walkSource(root, top string, fn func(path, name string, info fs.FileInfo) e
 	})
 }
 
-func scanSource(root, top string) (scanResult, error) {
+func scanBundle(b bundle) (scanResult, error) {
 	var r scanResult
-	err := walkSource(root, top, func(p, name string, info fs.FileInfo) error {
+	err := b.walk(func(p, name string, info fs.FileInfo) error {
 		switch mode := info.Mode(); {
 		case mode.IsDir():
 			r.Dirs++
@@ -106,10 +163,10 @@ func (c *countingReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// writeTar streams root as a tar archive into w. onRead reports file bytes consumed.
-func writeTar(ctx context.Context, w io.Writer, root, top string, warn func(string), onRead func(int)) error {
+// writeTar streams b as a tar archive into w. onRead reports file bytes consumed.
+func writeTar(ctx context.Context, w io.Writer, b bundle, warn func(string), onRead func(int)) error {
 	tw := tar.NewWriter(w)
-	err := walkSource(root, top, func(p, name string, info fs.FileInfo) error {
+	err := b.walk(func(p, name string, info fs.FileInfo) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}

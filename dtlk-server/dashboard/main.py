@@ -79,7 +79,7 @@ with tab_files:
         table = [
             {
                 "코드": f["code"],
-                "이름": f["name"] + ("/" if f["kind"] == "dir" else ""),
+                "이름": f["name"] + ("/" if f["kind"] != "file" else ""),
                 "크기": human(f["size"]),
                 "목록": f["tag"] or "",
                 "업로드 IP": f["ip"],
@@ -102,7 +102,7 @@ with tab_files:
     if uploads:
         table = [
             {
-                "이름": u["name"] + ("/" if u["kind"] == "dir" else ""),
+                "이름": u["name"] + ("/" if u["kind"] != "file" else ""),
                 "받은 크기": human(u["received"]),
                 "예약": human(max(u["reserved"], u["received"])),
                 "IP": u["ip"],

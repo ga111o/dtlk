@@ -7,8 +7,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -23,14 +25,24 @@ func mustWrite(t *testing.T, path, content string, perm fs.FileMode) {
 	}
 }
 
+// single is the bundle of one path archived as top.
+func single(root, top string) bundle {
+	return bundle{name: top, srcs: []source{{path: root, name: top}}}
+}
+
 func packZstd(t *testing.T, root, top string) []byte {
+	t.Helper()
+	return packBundle(t, single(root, top))
+}
+
+func packBundle(t *testing.T, b bundle) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	zw, err := zstd.NewWriter(&buf)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writeTar(context.Background(), zw, root, top, func(string) {}, nil); err != nil {
+	if err := writeTar(context.Background(), zw, b, func(string) {}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := zw.Close(); err != nil {
@@ -61,7 +73,7 @@ func TestRoundTripDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	scan, err := scanSource(root+"/", "test1")
+	scan, err := scanBundle(single(root+"/", "test1"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,6 +137,96 @@ func TestRootSymlinkIsFollowed(t *testing.T) {
 	}
 }
 
+func TestRoundTripSeveralPaths(t *testing.T) {
+	src := t.TempDir()
+	mustWrite(t, filepath.Join(src, "linear-algebra3.pdf"), "three", 0o644)
+	mustWrite(t, filepath.Join(src, "sub/linear-algebra4.pdf"), "four", 0o600)
+	mustWrite(t, filepath.Join(src, "notes/a.txt"), "a", 0o644)
+	now := time.Date(2026, 10, 19, 14, 30, 5, 0, time.Local)
+	b, err := newBundle([]string{
+		filepath.Join(src, "linear-algebra3.pdf"),
+		filepath.Join(src, "sub/linear-algebra4.pdf"),
+		filepath.Join(src, "notes"),
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.name != "dtlk-261019-143005" || b.kind != "bundle" {
+		t.Fatalf("bundle = %q %q", b.name, b.kind)
+	}
+	want := []bundleItem{{"linear-algebra3.pdf", "file"}, {"linear-algebra4.pdf", "file"}, {"notes", "dir"}}
+	if got := b.items(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("items = %v", got)
+	}
+
+	scan, err := scanBundle(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scan.Files != 3 || scan.Dirs != 2 || scan.Bytes != 10 {
+		t.Fatalf("unexpected scan: %+v", scan)
+	}
+	data := packBundle(t, b)
+	if scan.TarSize < int64(len(data)) {
+		t.Fatalf("estimate %d smaller than compressed %d", scan.TarSize, len(data))
+	}
+
+	dest := t.TempDir()
+	top, err := unpackZstd(t, data, dest)
+	if err != nil || top != "dtlk-261019-143005" {
+		t.Fatalf("top = %q, %v", top, err)
+	}
+	for rel, want := range map[string]string{
+		"linear-algebra3.pdf": "three", "linear-algebra4.pdf": "four", "notes/a.txt": "a",
+	} {
+		if got, err := os.ReadFile(filepath.Join(dest, top, rel)); err != nil || string(got) != want {
+			t.Errorf("%s = %q, %v", rel, got, err)
+		}
+	}
+	if fi, err := os.Stat(filepath.Join(dest, top, "linear-algebra4.pdf")); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("linear-algebra4.pdf mode = %v, %v", fi.Mode(), err)
+	}
+	if fi, err := os.Stat(filepath.Join(dest, top)); err != nil || fi.Mode().Perm() != 0o755 || !fi.ModTime().Equal(now) {
+		t.Fatalf("bundle folder = %v %v, %v", fi.Mode(), fi.ModTime(), err)
+	}
+}
+
+func TestNewBundle(t *testing.T) {
+	src := t.TempDir()
+	mustWrite(t, filepath.Join(src, "a/x.pdf"), "1", 0o644)
+	mustWrite(t, filepath.Join(src, "b/x.pdf"), "2", 0o644)
+	now := time.Now()
+
+	for _, c := range []struct{ path, kind string }{{"a/x.pdf", "file"}, {"a", "dir"}} {
+		b, err := newBundle([]string{filepath.Join(src, c.path)}, now)
+		if err != nil || b.name != filepath.Base(c.path) || b.kind != c.kind || len(b.srcs) != 1 || b.items() != nil {
+			t.Errorf("%s: got %+v, %v", c.path, b, err)
+		}
+	}
+
+	bad := []struct {
+		paths []string
+		want  string
+	}{
+		{[]string{"a/x.pdf", "b/x.pdf"}, "duplicate name: x.pdf"},
+		{[]string{"a/x.pdf", "a/x.pdf"}, "duplicate name: x.pdf"},
+		{[]string{"a/x.pdf", "missing.pdf"}, "path not found"},
+		{[]string{"a", "/"}, "cannot upload this path"},
+	}
+	for _, c := range bad {
+		var paths []string
+		for _, p := range c.paths {
+			if !filepath.IsAbs(p) {
+				p = filepath.Join(src, p)
+			}
+			paths = append(paths, p)
+		}
+		if _, err := newBundle(paths, now); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%v: got %v, want %q", c.paths, err, c.want)
+		}
+	}
+}
+
 // rawFrame stores data in a zstd frame of uncompressed blocks, like the web upload
 // page does for data that does not compress (or when the browser lacks WebAssembly).
 func rawFrame(data []byte) []byte {
@@ -150,7 +252,7 @@ func TestConcatenatedFrames(t *testing.T) {
 	mustWrite(t, filepath.Join(root, "big.txt"), big, 0o644)
 	mustWrite(t, filepath.Join(root, "sub/a.txt"), "a", 0o644)
 	var tarBuf bytes.Buffer
-	if err := writeTar(context.Background(), &tarBuf, root, "web", func(string) {}, nil); err != nil {
+	if err := writeTar(context.Background(), &tarBuf, single(root, "web"), func(string) {}, nil); err != nil {
 		t.Fatal(err)
 	}
 	raw := tarBuf.Bytes()
@@ -238,34 +340,36 @@ func TestParseUpArgs(t *testing.T) {
 		cfg  map[string]string
 		want upOpts
 	}{
-		{[]string{"dir"}, nil, upOpts{24, "", "dir"}},
-		{[]string{"-h", "3", "dir"}, nil, upOpts{3, "", "dir"}},
-		{[]string{"dir", "-h", "48"}, nil, upOpts{48, "", "dir"}},
-		{[]string{"-h=168", "dir"}, nil, upOpts{168, "", "dir"}},
-		{[]string{"-h", "1", "--", "-weird"}, nil, upOpts{1, "", "-weird"}},
-		{[]string{"-t", "MyProj", "dir"}, nil, upOpts{24, "myproj", "dir"}},
-		{[]string{"dir", "-t", "x"}, nil, upOpts{24, "x", "dir"}},
-		{[]string{"-t=a_b-1", "-h", "3", "dir"}, nil, upOpts{3, "a_b-1", "dir"}},
-		{[]string{"-t", strings.Repeat("a", 64), "dir"}, nil, upOpts{24, strings.Repeat("a", 64), "dir"}},
-		{[]string{"-t", "", "dir"}, nil, upOpts{24, "", "dir"}},
-		{[]string{"a=b"}, nil, upOpts{24, "", "a=b"}},
+		{[]string{"dir"}, nil, upOpts{24, "", []string{"dir"}}},
+		{[]string{"-h", "3", "dir"}, nil, upOpts{3, "", []string{"dir"}}},
+		{[]string{"dir", "-h", "48"}, nil, upOpts{48, "", []string{"dir"}}},
+		{[]string{"-h=168", "dir"}, nil, upOpts{168, "", []string{"dir"}}},
+		{[]string{"-h", "1", "--", "-weird"}, nil, upOpts{1, "", []string{"-weird"}}},
+		{[]string{"-t", "MyProj", "dir"}, nil, upOpts{24, "myproj", []string{"dir"}}},
+		{[]string{"dir", "-t", "x"}, nil, upOpts{24, "x", []string{"dir"}}},
+		{[]string{"-t=a_b-1", "-h", "3", "dir"}, nil, upOpts{3, "a_b-1", []string{"dir"}}},
+		{[]string{"-t", strings.Repeat("a", 64), "dir"}, nil, upOpts{24, strings.Repeat("a", 64), []string{"dir"}}},
+		{[]string{"-t", "", "dir"}, nil, upOpts{24, "", []string{"dir"}}},
+		{[]string{"a=b"}, nil, upOpts{24, "", []string{"a=b"}}},
+		{[]string{"a", "b"}, nil, upOpts{24, "", []string{"a", "b"}}},
+		{[]string{"a", "-h", "3", "b", "--", "-c"}, nil, upOpts{3, "", []string{"a", "b", "-c"}}},
 		// config defaults; explicit options win; -t "" drops the configured tag
-		{[]string{"dir"}, cfg, upOpts{48, "asdf", "dir"}},
-		{[]string{"dir"}, map[string]string{"tag": "MyProj"}, upOpts{24, "myproj", "dir"}},
-		{[]string{"-h", "3", "-t", "other", "dir"}, cfg, upOpts{3, "other", "dir"}},
-		{[]string{"dir", "-t", ""}, cfg, upOpts{48, "", "dir"}},
-		{[]string{"-t=", "dir"}, cfg, upOpts{48, "", "dir"}},
-		{[]string{"-h", "5", "-t", "x", "dir"}, map[string]string{"hours": "500", "tag": "a.b"}, upOpts{5, "x", "dir"}},
+		{[]string{"dir"}, cfg, upOpts{48, "asdf", []string{"dir"}}},
+		{[]string{"dir"}, map[string]string{"tag": "MyProj"}, upOpts{24, "myproj", []string{"dir"}}},
+		{[]string{"-h", "3", "-t", "other", "dir"}, cfg, upOpts{3, "other", []string{"dir"}}},
+		{[]string{"dir", "-t", ""}, cfg, upOpts{48, "", []string{"dir"}}},
+		{[]string{"-t=", "dir"}, cfg, upOpts{48, "", []string{"dir"}}},
+		{[]string{"-h", "5", "-t", "x", "dir"}, map[string]string{"hours": "500", "tag": "a.b"}, upOpts{5, "x", []string{"dir"}}},
 	}
 	for _, c := range ok {
 		got, err := parseUpArgs(c.args, c.cfg)
-		if err != nil || got != c.want {
+		if err != nil || !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%v %v: got %+v %v", c.args, c.cfg, got, err)
 		}
 	}
 	bad := [][]string{
 		{"-h", "0", "dir"}, {"-h", "169", "dir"}, {"-h", "1.5", "dir"}, {"-h", "abc", "dir"}, {"-h", "", "dir"},
-		{"-h"}, {"dir", "-h"}, {}, {"a", "b"}, {"-x", "dir"},
+		{"-h"}, {"dir", "-h"}, {}, {"-h", "3"}, {"--"}, {"-x", "dir"},
 		{"-t"}, {"dir", "-t"}, {"-t", "a b", "dir"},
 		{"-t", strings.Repeat("a", 65), "dir"}, {"-t", "한글", "dir"}, {"-t", "a.b", "dir"},
 		// old option names are gone
@@ -298,7 +402,7 @@ func TestFreeName(t *testing.T) {
 		{".bashrc", false, ".bashrc (1)"},
 	}
 	for _, c := range cases {
-		if got := freeName(dir, c.name, c.isDir); got != c.want {
+		if got := freeName(dir, c.name, c.isDir, nil); got != c.want {
 			t.Errorf("freeName(%q) = %q, want %q", c.name, got, c.want)
 		}
 	}
@@ -316,7 +420,7 @@ func TestResolveTarget(t *testing.T) {
 	run := func(input string) (string, bool, error) {
 		var out strings.Builder
 		p := &prompter{in: bufioReader(input), out: &out}
-		return resolveTarget(dir, "test1", true, p)
+		return resolveTarget(dir, "test1", true, nil, p)
 	}
 	if got, ow, err := run("y\n"); err != nil || got != "test1" || !ow {
 		t.Errorf("y: %q %v %v", got, ow, err)
@@ -334,10 +438,21 @@ func TestResolveTarget(t *testing.T) {
 	if _, _, err := run(""); err == nil {
 		t.Error("EOF should fail")
 	}
-	if _, _, err := resolveTarget(dir, "test1", true, nil); err == nil {
+	if _, _, err := resolveTarget(dir, "test1", true, nil, nil); err == nil {
 		t.Error("non-interactive conflict should fail")
 	}
-	if got, ow, err := resolveTarget(dir, "new", true, nil); err != nil || got != "new" || ow {
+	if got, ow, err := resolveTarget(dir, "new", true, nil, nil); err != nil || got != "new" || ow {
 		t.Errorf("no conflict: %q %v %v", got, ow, err)
+	}
+
+	// a new name may not be another item of the same bundle, nor is one suggested
+	used := map[string]bool{"test1": true, "test1 (1)": true, "other": true}
+	var out strings.Builder
+	p := &prompter{in: bufioReader("n\nother\n\n"), out: &out}
+	if got, ow, err := resolveTarget(dir, "test1", true, used, p); err != nil || got != "test1 (2)" || ow {
+		t.Errorf("used: %q %v %v", got, ow, err)
+	}
+	if !strings.Contains(out.String(), "'other' is another item of this download.") {
+		t.Errorf("used: prompt was %q", out.String())
 	}
 }
