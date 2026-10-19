@@ -4,11 +4,11 @@ from collections.abc import Iterable, Iterator
 from typing import Any
 
 from fastapi import FastAPI, Header, Request, Response
-from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from . import convert, listing
+from . import convert, listing, webupload
 from .web import RANGE_RE, client_ip, install_error_handler
 from .service import ApiError, Service, iso
 
@@ -107,6 +107,23 @@ def create_public_app(svc: Service) -> FastAPI:
         except ApiError as exc:
             return listing.render_error(exc, as_html)
         return listing.render(tag, rows, as_html)
+
+    page = webupload.render_page(cfg)
+
+    @app.get("/")
+    def upload_page() -> HTMLResponse:
+        return HTMLResponse(page, headers=listing.HEADERS)
+
+    @app.post("/upload")
+    async def form_upload(request: Request) -> Response:
+        return await webupload.handle_form(svc, client_ip(request), request)
+
+    @app.get("/zstd.wasm")
+    def zstd_wasm() -> Response:
+        path = cfg.static_dir / "zstd.wasm"
+        if not path.is_file():
+            return PlainTextResponse("Not Found", status_code=404)
+        return FileResponse(path, media_type="application/wasm", headers={"Cache-Control": "no-cache"})
 
     @app.get("/install.sh")
     def install_sh() -> PlainTextResponse:

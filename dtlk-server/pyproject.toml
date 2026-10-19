@@ -6,6 +6,7 @@ dependencies = [
     "boto3>=1.43",
     "fastapi>=0.143",
     "httpx2>=2.13",
+    "python-multipart>=0.0.32",
     "stream-zip>=0.0.84",
     "streamlit>=1.66",
     "tzdata>=2026.5",

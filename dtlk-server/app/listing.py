@@ -30,7 +30,7 @@ $body
 """)
 
 
-def _when(ts: float) -> str:
+def when(ts: float) -> str:
     # The api container's TZ is DTLK_TZ (default Asia/Seoul).
     return time.strftime("%Y-%m-%d %H:%M %Z", time.localtime(ts))
 
@@ -41,12 +41,12 @@ def _display_name(row: sqlite3.Row) -> str:
 
 def render(tag: str, rows: list[sqlite3.Row], as_html: bool) -> Response:
     if not as_html:
-        text = "".join(f"{r['code']}  {_when(r['expires_at'])}  {_display_name(r)}\n" for r in rows)
+        text = "".join(f"{r['code']}  {when(r['expires_at'])}  {_display_name(r)}\n" for r in rows)
         return PlainTextResponse(text, headers=HEADERS)
 
     trs = "\n".join(
         f"<tr><td>{html.escape(_display_name(r))}</td>"
-        f"<td nowrap>{_when(r['expires_at'])}</td>"
+        f"<td nowrap>{when(r['expires_at'])}</td>"
         f'<td><a href="/{r["code"]}">{r["code"]}</a></td></tr>'
         for r in rows
     )

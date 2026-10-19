@@ -241,7 +241,6 @@ def test_browser_download_folder_as_zip(env):
 
 def test_unknown_paths_are_404_and_not_counted(env):
     c = env.client("10.3.3.3")
-    assert c.get("/").status_code == 404
     for _ in range(25):
         assert c.get("/12345").status_code == 404
         assert c.get("/favicon.ico").status_code == 404

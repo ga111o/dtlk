@@ -125,6 +125,56 @@ func TestRootSymlinkIsFollowed(t *testing.T) {
 	}
 }
 
+// rawFrame stores data in a zstd frame of uncompressed blocks, like the web upload
+// page does for data that does not compress (or when the browser lacks WebAssembly).
+func rawFrame(data []byte) []byte {
+	const block = 128 << 10
+	out := []byte{0x28, 0xb5, 0x2f, 0xfd, 0x00, 0x38}
+	for i := 0; i == 0 || i < len(data); i += block {
+		c := data[i:min(i+block, len(data))]
+		v := len(c) << 3
+		if i+block >= len(data) {
+			v |= 1
+		}
+		out = append(out, byte(v), byte(v>>8), byte(v>>16))
+		out = append(out, c...)
+	}
+	return out
+}
+
+// Web uploads are a run of independent frames, some compressed and some raw.
+func TestConcatenatedFrames(t *testing.T) {
+	src := t.TempDir()
+	root := filepath.Join(src, "web")
+	big := strings.Repeat("dtlk web upload\n", 40000)
+	mustWrite(t, filepath.Join(root, "big.txt"), big, 0o644)
+	mustWrite(t, filepath.Join(root, "sub/a.txt"), "a", 0o644)
+	var tarBuf bytes.Buffer
+	if err := writeTar(context.Background(), &tarBuf, root, "web", func(string) {}, nil); err != nil {
+		t.Fatal(err)
+	}
+	raw := tarBuf.Bytes()
+	enc, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := len(raw)/3, 2*len(raw)/3
+	data := enc.EncodeAll(raw[a:b], rawFrame(raw[:a]))
+	data = append(data, rawFrame(raw[b:])...)
+
+	dest := t.TempDir()
+	top, err := unpackZstd(t, data, dest)
+	if err != nil || top != "web" {
+		t.Fatalf("top = %q, %v", top, err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dest, "web/big.txt")); string(got) != big {
+		t.Fatalf("big.txt differs (%d bytes)", len(got))
+	}
+	if got, _ := os.ReadFile(filepath.Join(dest, "web/sub/a.txt")); string(got) != "a" {
+		t.Fatalf("a.txt = %q", got)
+	}
+}
+
 func rawTar(t *testing.T, entries ...*tar.Header) []byte {
 	t.Helper()
 	var buf bytes.Buffer

@@ -15,6 +15,15 @@ RUN mkdir /out && for arch in amd64 arm64; do \
       (cd /out && sha256sum dtlk-linux-$arch > dtlk-linux-$arch.sha256); \
     done
 
+# ---- zstd compressor for the web upload page (dtlk-server/zstd-wasm) ----
+FROM python:3.14.8-slim AS zstd-wasm
+COPY dtlk-server/zstd-wasm/compile.sh /tmp/compile.sh
+RUN sh /tmp/compile.sh /out
+
+# local copy: dtlk-server/zstd-wasm/build.sh
+FROM scratch AS zstd-wasm-export
+COPY --from=zstd-wasm /out/zstd.wasm /
+
 # ---- Python base ----
 FROM python:3.14.8-slim AS base
 COPY --from=ghcr.io/astral-sh/uv:0.13.1 /uv /usr/local/bin/uv
@@ -28,8 +37,10 @@ COPY dtlk-server/pyproject.toml dtlk-server/uv.lock dtlk-server/.python-version 
 
 # ---- tests (docker build --target test) ----
 FROM base AS test
+RUN apt-get update && apt-get install -y --no-install-recommends nodejs && rm -rf /var/lib/apt/lists/*
 RUN uv sync --frozen
 COPY --from=client /out /tmp/client-built
+COPY --from=zstd-wasm /out/zstd.wasm ./static/zstd.wasm
 COPY dtlk-server/app ./app
 COPY dtlk-server/tests ./tests
 RUN uv run --frozen pytest -q
@@ -41,6 +52,7 @@ COPY dtlk-server/app ./app
 COPY dtlk-server/dashboard ./dashboard
 COPY dtlk-package/install.sh ./static/install.sh
 COPY --from=client /out ./static/dl
+COPY --from=zstd-wasm /out/zstd.wasm ./static/zstd.wasm
 RUN useradd --system --uid 10002 --home-dir /app dtlk && mkdir -p /data && chown dtlk:dtlk /data
 USER dtlk
 EXPOSE 8000 8001 8501
