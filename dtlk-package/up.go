@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,45 +29,76 @@ func parseHours(s string) (int, error) {
 	return h, nil
 }
 
-// parseUpArgs accepts "--h N" / "--h=N" anywhere around a single path.
-func parseUpArgs(args []string) (hours int, path string, err error) {
-	hours = defaultHours
+var tagRe = regexp.MustCompile(`^[a-z0-9_-]{1,64}$`)
+
+// parseTag lowercases a list name (-n); the server stores it the same way.
+func parseTag(s string) (string, error) {
+	t := strings.ToLower(s)
+	if !tagRe.MatchString(t) {
+		return "", usageErrorf("-n must be 1-64 letters, digits, '-' or '_': %q", s)
+	}
+	return t, nil
+}
+
+type upOpts struct {
+	hours int
+	tag   string
+	path  string
+}
+
+// parseUpArgs accepts "--h N" / "--h=N" and "-n NAME" / "-n=NAME" anywhere around a single path.
+func parseUpArgs(args []string) (o upOpts, err error) {
+	o.hours = defaultHours
 	var paths []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
 		case a == "--h":
 			if i+1 >= len(args) {
-				return 0, "", usageErrorf("missing hours after --h (1-%d)", maxHours)
+				return upOpts{}, usageErrorf("missing hours after --h (1-%d)", maxHours)
 			}
 			i++
-			if hours, err = parseHours(args[i]); err != nil {
-				return 0, "", err
+			if o.hours, err = parseHours(args[i]); err != nil {
+				return upOpts{}, err
 			}
 		case strings.HasPrefix(a, "--h="):
-			if hours, err = parseHours(strings.TrimPrefix(a, "--h=")); err != nil {
-				return 0, "", err
+			if o.hours, err = parseHours(strings.TrimPrefix(a, "--h=")); err != nil {
+				return upOpts{}, err
+			}
+		case a == "-n":
+			if i+1 >= len(args) {
+				return upOpts{}, usageErrorf("missing name after -n")
+			}
+			i++
+			if o.tag, err = parseTag(args[i]); err != nil {
+				return upOpts{}, err
+			}
+		case strings.HasPrefix(a, "-n="):
+			if o.tag, err = parseTag(strings.TrimPrefix(a, "-n=")); err != nil {
+				return upOpts{}, err
 			}
 		case a == "--":
 			paths = append(paths, args[i+1:]...)
 			i = len(args)
 		case strings.HasPrefix(a, "-") && a != "-":
-			return 0, "", usageErrorf("unknown option: %s", a)
+			return upOpts{}, usageErrorf("unknown option: %s", a)
 		default:
 			paths = append(paths, a)
 		}
 	}
 	if len(paths) != 1 {
-		return 0, "", usageErrorf("usage: dtlk up [--h hours] <file-or-dir>")
+		return upOpts{}, usageErrorf("usage: dtlk up [--h hours] [-n name] <file-or-dir>")
 	}
-	return hours, paths[0], nil
+	o.path = paths[0]
+	return o, nil
 }
 
 func cmdUp(ctx context.Context, args []string) error {
-	hours, path, err := parseUpArgs(args)
+	opts, err := parseUpArgs(args)
 	if err != nil {
 		return err
 	}
+	hours, path := opts.hours, opts.path
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return err
@@ -109,6 +141,7 @@ func cmdUp(ctx context.Context, args []string) error {
 		Kind:          kind,
 		EstimatedSize: scan.TarSize + scan.TarSize/100 + 1<<20,
 		Hours:         hours,
+		Tag:           opts.tag,
 	})
 	if err != nil {
 		return err
@@ -142,6 +175,9 @@ func cmdUp(ctx context.Context, args []string) error {
 	fmt.Printf("Expires:  %s (in %dh)\n", exp.Format("2006-01-02 15:04"), hours)
 	fmt.Printf("Download: dtlk down %s\n", res.Code)
 	fmt.Printf("Web:      %s/%s\n", c.base, res.Code)
+	if opts.tag != "" {
+		fmt.Printf("List:     %s/files/%s\n", c.base, opts.tag)
+	}
 	return nil
 }
 

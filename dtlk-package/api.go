@@ -156,6 +156,7 @@ type createUploadReq struct {
 	Kind          string `json:"kind"`
 	EstimatedSize int64  `json:"estimated_size"`
 	Hours         int    `json:"hours"`
+	Tag           string `json:"tag,omitempty"`
 }
 
 type createUploadResp struct {

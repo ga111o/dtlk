@@ -1,6 +1,7 @@
 import io
 import os
 import re
+import sqlite3
 import stat
 import zipfile
 from datetime import datetime
@@ -10,6 +11,7 @@ from botocore.exceptions import ClientError
 
 from app.config import MiB
 from app.convert import content_disposition
+from app.db import DB
 
 from .conftest import CHUNK, make_archive, upload
 
@@ -261,6 +263,7 @@ def test_admin_overview_settings_and_delete(env):
 
     ov = env.admin.get("/admin/overview").json()
     assert [f["code"] for f in ov["files"]] == [code]
+    assert ov["files"][0]["tag"] is None
     assert [u["name"] for u in ov["uploads"]] == ["pending"]
     assert ov["reserved_bytes"] == 4096 and ov["used_bytes"] > 0
     assert ov["settings"]["storage_cap_bytes"] == 32 * 1024**3
@@ -277,3 +280,88 @@ def test_admin_overview_settings_and_delete(env):
     upload_id = ov["uploads"][0]["id"]
     assert env.admin.delete(f"/admin/uploads/{upload_id}").status_code == 204
     assert env.admin.get("/admin/overview").json()["uploads"] == []
+
+
+HTML = {"Accept": "text/html,application/xhtml+xml,*/*;q=0.8"}
+
+
+def test_file_list_by_tag(env):
+    a = upload(env.public, make_archive({"a.txt": b"a"}), name="a.txt", kind="file", hours=1, tag="MyProj")["code"]
+    env.clock.advance(1)
+    b = upload(env.public, make_archive({"photos/": None}), name="photos", tag="myproj")["code"]
+    other = upload(env.public, make_archive({"x.txt": b"x"}), name="x.txt", kind="file", tag="other")["code"]
+    plain = upload(env.public, make_archive({"y.txt": b"y"}), name="y.txt", kind="file")["code"]
+
+    r = env.public.get("/files/MYPROJ", headers=HTML)
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/html")
+    assert r.headers["cache-control"] == "no-store"
+    page = r.text
+    assert "a.txt" in page and "photos/" in page
+    assert f'href="/{a}"' in page and f'href="/{b}"' in page
+    assert other not in page and plain not in page and "x.txt" not in page
+    assert page.index("photos/") < page.index("a.txt")  # newest first
+
+    r = env.public.get("/files/myproj")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/plain")
+    lines = r.text.splitlines()
+    assert [line.split()[0] for line in lines] == [b, a]
+    assert lines[0].endswith("  photos/") and lines[1].endswith("  a.txt")
+
+    # a.txt expires after 1 hour and drops out; once everything is gone the list is a 404
+    env.clock.advance(3600)
+    assert [line.split()[0] for line in env.public.get("/files/myproj").text.splitlines()] == [b]
+    env.clock.advance(24 * 3600)
+    r = env.public.get("/files/myproj", headers=HTML)
+    assert r.status_code == 404 and r.headers["content-type"].startswith("text/html")
+    assert env.public.get("/files/myproj").text == "List not found or all its files have expired\n"
+
+
+def test_file_list_escapes_names(env):
+    upload(env.public, make_archive({"<script>.txt": b"x"}), name="<script>.txt", kind="file", tag="xss")
+    page = env.public.get("/files/xss", headers=HTML).text
+    assert "<script>.txt" not in page and "&lt;script&gt;.txt" in page
+
+
+@pytest.mark.parametrize("tag", ["", "a b", "x" * 65, "한글", "a.b", "a/b"])
+def test_bad_tags_rejected(env, tag):
+    r = env.public.post("/api/uploads", json={"name": "a", "kind": "file", "estimated_size": 1, "hours": 1, "tag": tag})
+    assert r.status_code == 400
+
+
+def test_unknown_tags_count_toward_block(env):
+    code = upload(env.public, make_archive({"a.txt": b"hi"}), name="a.txt", kind="file", tag="real")["code"]
+    c = env.client("10.4.4.4")
+    for _ in range(25):  # malformed names never reach the lookup
+        assert c.get("/files/a.b").status_code == 404
+        assert c.get("/files/" + "x" * 65).status_code == 404
+    assert env.svc.db.conn.execute("SELECT COUNT(*) FROM lookup_failures").fetchone()[0] == 0
+
+    for _ in range(20):
+        assert c.get("/files/nope").status_code == 404
+    r = c.get("/files/real")
+    assert r.status_code == 429 and 1700 < int(r.headers["retry-after"]) <= 1800
+    assert c.get(f"/{code}").status_code == 429
+    assert env.client("10.5.5.5").get("/files/real").status_code == 200
+
+
+def test_old_database_is_migrated(tmp_path):
+    path = str(tmp_path / "old.db")
+    old = sqlite3.connect(path)
+    old.executescript(
+        "CREATE TABLE uploads (id TEXT PRIMARY KEY, ip TEXT NOT NULL, name TEXT NOT NULL, kind TEXT NOT NULL,"
+        " hours INTEGER NOT NULL, reserved INTEGER NOT NULL, received INTEGER NOT NULL DEFAULT 0,"
+        " object_key TEXT NOT NULL, s3_upload_id TEXT, state TEXT NOT NULL DEFAULT 'open',"
+        " created_at REAL NOT NULL, updated_at REAL NOT NULL);"
+        "CREATE TABLE files (code TEXT PRIMARY KEY, object_key TEXT NOT NULL, name TEXT NOT NULL,"
+        " kind TEXT NOT NULL, size INTEGER NOT NULL, ip TEXT NOT NULL, created_at REAL NOT NULL,"
+        " expires_at REAL NOT NULL);"
+        "INSERT INTO files VALUES ('123456', 'objects/x', 'a.txt', 'file', 1, '1.2.3.4', 0, 9e9);"
+    )
+    old.close()
+
+    db = DB(path)
+    for table in ("uploads", "files"):
+        assert "tag" in {r["name"] for r in db.conn.execute(f"PRAGMA table_info({table})")}
+    assert db.conn.execute("SELECT name FROM sqlite_master WHERE name = 'files_tag'").fetchone()
+    assert db.conn.execute("SELECT name, tag FROM files").fetchone()[:] == ("a.txt", None)
+    DB(path)  # running the migration again is a no-op

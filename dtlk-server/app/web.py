@@ -19,7 +19,20 @@ class CodeConvertor(Convertor[str]):
         return value
 
 
+class TagConvertor(Convertor[str]):
+    """Matches a list name given with `dtlk up -n`; other paths fall through to a plain 404."""
+
+    regex = r"[A-Za-z0-9_-]{1,64}"
+
+    def convert(self, value: str) -> str:
+        return value
+
+    def to_string(self, value: str) -> str:
+        return value
+
+
 register_url_convertor("code", CodeConvertor())
+register_url_convertor("tag", TagConvertor())
 
 RANGE_RE = re.compile(r"^bytes=(\d+)-(\d*)$")
 

@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from . import convert
+from . import convert, listing
 from .web import RANGE_RE, client_ip, install_error_handler
 from .service import ApiError, Service, iso
 
@@ -22,6 +22,7 @@ class CreateUpload(BaseModel):
     kind: str
     estimated_size: int
     hours: int = 24
+    tag: str | None = None
 
 
 def _body_chunks(body: Any, chunks: Iterable[bytes] | None = None) -> Iterator[bytes]:
@@ -43,7 +44,7 @@ def create_public_app(svc: Service) -> FastAPI:
 
     @app.post("/api/uploads")
     def create_upload(body: CreateUpload, request: Request) -> dict[str, Any]:
-        return svc.create_upload(client_ip(request), body.name, body.kind, body.estimated_size, body.hours)
+        return svc.create_upload(client_ip(request), body.name, body.kind, body.estimated_size, body.hours, body.tag)
 
     @app.put("/api/uploads/{upload_id}/parts/{n:int}")
     async def put_part(upload_id: str, n: int, request: Request) -> dict[str, bool]:
@@ -96,6 +97,16 @@ def create_public_app(svc: Service) -> FastAPI:
         return StreamingResponse(
             _body_chunks(obj["Body"]), status_code=status, headers=headers, media_type="application/octet-stream"
         )
+
+    @app.get("/files/{tag:tag}")
+    def file_list(tag: str, request: Request) -> Response:
+        as_html = "text/html" in request.headers.get("accept", "")
+        tag = tag.lower()
+        try:
+            rows = svc.list_tag(client_ip(request), tag)
+        except ApiError as exc:
+            return listing.render_error(exc, as_html)
+        return listing.render(tag, rows, as_html)
 
     @app.get("/install.sh")
     def install_sh() -> PlainTextResponse:

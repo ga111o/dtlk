@@ -90,8 +90,11 @@ def make_archive(entries: dict[str, bytes | None], links: dict[str, str] | None 
     return zstd.compress(raw.getvalue())
 
 
-def upload(client: TestClient, data: bytes, name: str = "test1", kind: str = "dir", hours: int = 24) -> dict:
-    r = client.post("/api/uploads", json={"name": name, "kind": kind, "estimated_size": len(data), "hours": hours})
+def upload(
+    client: TestClient, data: bytes, name: str = "test1", kind: str = "dir", hours: int = 24, tag: str | None = None
+) -> dict:
+    body = {"name": name, "kind": kind, "estimated_size": len(data), "hours": hours, "tag": tag}
+    r = client.post("/api/uploads", json=body)
     assert r.status_code == 200, r.text
     upload_id = r.json()["upload_id"]
     for i in range(0, len(data), CHUNK):

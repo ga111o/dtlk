@@ -183,28 +183,33 @@ func TestExtractNeverWritesThroughSymlink(t *testing.T) {
 
 func TestParseUpArgs(t *testing.T) {
 	ok := []struct {
-		args  []string
-		hours int
-		path  string
+		args []string
+		want upOpts
 	}{
-		{[]string{"dir"}, 24, "dir"},
-		{[]string{"--h", "3", "dir"}, 3, "dir"},
-		{[]string{"dir", "--h", "48"}, 48, "dir"},
-		{[]string{"--h=168", "dir"}, 168, "dir"},
-		{[]string{"--h", "1", "--", "-weird"}, 1, "-weird"},
+		{[]string{"dir"}, upOpts{24, "", "dir"}},
+		{[]string{"--h", "3", "dir"}, upOpts{3, "", "dir"}},
+		{[]string{"dir", "--h", "48"}, upOpts{48, "", "dir"}},
+		{[]string{"--h=168", "dir"}, upOpts{168, "", "dir"}},
+		{[]string{"--h", "1", "--", "-weird"}, upOpts{1, "", "-weird"}},
+		{[]string{"-n", "MyProj", "dir"}, upOpts{24, "myproj", "dir"}},
+		{[]string{"dir", "-n", "x"}, upOpts{24, "x", "dir"}},
+		{[]string{"-n=a_b-1", "--h", "3", "dir"}, upOpts{3, "a_b-1", "dir"}},
+		{[]string{"-n", strings.Repeat("a", 64), "dir"}, upOpts{24, strings.Repeat("a", 64), "dir"}},
 	}
 	for _, c := range ok {
-		h, p, err := parseUpArgs(c.args)
-		if err != nil || h != c.hours || p != c.path {
-			t.Errorf("%v: got %d %q %v", c.args, h, p, err)
+		got, err := parseUpArgs(c.args)
+		if err != nil || got != c.want {
+			t.Errorf("%v: got %+v %v", c.args, got, err)
 		}
 	}
 	bad := [][]string{
 		{"--h", "0", "dir"}, {"--h", "169", "dir"}, {"--h", "1.5", "dir"}, {"--h", "abc", "dir"},
 		{"--h"}, {"dir", "--h"}, {}, {"a", "b"}, {"-x", "dir"},
+		{"-n"}, {"dir", "-n"}, {"-n", "", "dir"}, {"-n=", "dir"}, {"-n", "a b", "dir"},
+		{"-n", strings.Repeat("a", 65), "dir"}, {"-n", "한글", "dir"}, {"-n", "a.b", "dir"},
 	}
 	for _, args := range bad {
-		if _, _, err := parseUpArgs(args); err == nil {
+		if _, err := parseUpArgs(args); err == nil {
 			t.Errorf("%v: expected error", args)
 		}
 	}

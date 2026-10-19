@@ -81,6 +81,7 @@ with tab_files:
                 "코드": f["code"],
                 "이름": f["name"] + ("/" if f["kind"] == "dir" else ""),
                 "크기": human(f["size"]),
+                "목록": f["tag"] or "",
                 "업로드 IP": f["ip"],
                 "업로드": when(f["created_at"]),
                 "만료": when(f["expires_at"]),

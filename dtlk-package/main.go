@@ -16,13 +16,15 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `dtlk - Transfer files and folders with a 6-digit code
 
 Usage:
-  dtlk up [--h hours] <file-or-dir>   Upload and print a 6-digit code (retention: default 24h, 1-168)
+  dtlk up [--h hours] [-n name] <file-or-dir>
+                                      Upload and print a 6-digit code (retention: default 24h, 1-168)
+                                      -n groups uploads under a name, listed at %s/files/<name>
   dtlk down <6-digit-code>            Download into the current directory
   dtlk version                        Print version
 
 Server: %s
   (config: %s, override with DTLK_SERVER)
-`, server, configPath())
+`, server, server, configPath())
 }
 
 func main() {

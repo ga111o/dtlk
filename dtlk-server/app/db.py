@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS uploads (
     reserved     INTEGER NOT NULL,
     received     INTEGER NOT NULL DEFAULT 0,
     object_key   TEXT NOT NULL,
+    tag          TEXT,
     s3_upload_id TEXT,
     state        TEXT NOT NULL DEFAULT 'open',
     created_at   REAL NOT NULL,
@@ -38,6 +39,7 @@ CREATE TABLE IF NOT EXISTS files (
     kind       TEXT NOT NULL,
     size       INTEGER NOT NULL,
     ip         TEXT NOT NULL,
+    tag        TEXT,
     created_at REAL NOT NULL,
     expires_at REAL NOT NULL
 );
@@ -69,7 +71,16 @@ class DB:
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA busy_timeout=5000")
         self.conn.executescript(SCHEMA)
+        self._migrate()
         self.lock = threading.RLock()
+
+    def _migrate(self) -> None:
+        """Bring databases created by older versions up to the current SCHEMA."""
+        for table in ("uploads", "files"):
+            columns = {r["name"] for r in self.conn.execute(f"PRAGMA table_info({table})")}
+            if "tag" not in columns:
+                self.conn.execute(f"ALTER TABLE {table} ADD COLUMN tag TEXT")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS files_tag ON files (tag, expires_at)")
 
     @contextmanager
     def tx(self) -> Iterator[sqlite3.Connection]:

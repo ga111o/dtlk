@@ -1,5 +1,6 @@
 import logging
 import math
+import re
 import secrets
 import shutil
 import sqlite3
@@ -17,6 +18,7 @@ log = logging.getLogger("dtlk")
 
 KINDS = ("file", "dir")
 MAX_PARTS = 10000
+TAG_RE = re.compile(r"[a-z0-9_-]{1,64}")
 
 
 class ApiError(Exception):
@@ -90,11 +92,17 @@ class Service:
 
     # ---- uploads --------------------------------------------------------
 
-    def create_upload(self, ip: str, name: str, kind: str, estimated_size: int, hours: int) -> dict[str, Any]:
+    def create_upload(
+        self, ip: str, name: str, kind: str, estimated_size: int, hours: int, tag: str | None = None
+    ) -> dict[str, Any]:
         if not valid_name(name):
             raise ApiError(400, "Invalid file name")
         if kind not in KINDS:
             raise ApiError(400, "kind must be 'file' or 'dir'")
+        if tag is not None:
+            tag = tag.lower()
+            if not TAG_RE.fullmatch(tag):
+                raise ApiError(400, "Invalid list name: use 1-64 letters, digits, '-' or '_'")
         if not 1 <= hours <= self.cfg.max_hours:
             raise ApiError(400, f"Retention hours must be an integer between 1 and {self.cfg.max_hours}")
         if estimated_size < 0:
@@ -119,9 +127,9 @@ class Service:
             else:
                 self._check_cap(c, now, reserve, s["storage_cap_bytes"])
                 c.execute(
-                    "INSERT INTO uploads (id, ip, name, kind, hours, reserved, object_key, created_at, updated_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (upload_id, ip, name, kind, hours, reserve, key, now, now),
+                    "INSERT INTO uploads (id, ip, name, kind, hours, reserved, object_key, tag, created_at, updated_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (upload_id, ip, name, kind, hours, reserve, key, tag, now, now),
                 )
                 c.execute("INSERT INTO upload_starts (ip, ts) VALUES (?, ?)", (ip, now))
         if error:
@@ -136,7 +144,7 @@ class Service:
             raise ApiError(503, "Storage unavailable; please try again shortly")
         with self.db.tx() as c:
             c.execute("UPDATE uploads SET s3_upload_id = ? WHERE id = ?", (s3_id, upload_id))
-        log.info("upload %s started by %s: %s (%s, %dh)", upload_id[:8], ip, name, kind, hours)
+        log.info("upload %s started by %s: %s (%s, %dh, list %s)", upload_id[:8], ip, name, kind, hours, tag or "-")
         return {"upload_id": upload_id, "chunk_size": self.cfg.chunk_size, "max_size": self.cfg.max_upload_bytes}
 
     def _open_upload(self, c: sqlite3.Connection, upload_id: str) -> sqlite3.Row:
@@ -227,9 +235,9 @@ class Service:
                 if not c.execute("SELECT 1 FROM files WHERE code = ?", (code,)).fetchone():
                     break
             c.execute(
-                "INSERT INTO files (code, object_key, name, kind, size, ip, created_at, expires_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (code, row["object_key"], row["name"], row["kind"], size, row["ip"], now, expires_at),
+                "INSERT INTO files (code, object_key, name, kind, size, ip, tag, created_at, expires_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (code, row["object_key"], row["name"], row["kind"], size, row["ip"], row["tag"], now, expires_at),
             )
             c.execute("DELETE FROM upload_parts WHERE upload_id = ?", (upload_id,))
             c.execute("DELETE FROM uploads WHERE id = ?", (upload_id,))
@@ -252,17 +260,36 @@ class Service:
 
     def lookup(self, ip: str, code: str) -> sqlite3.Row:
         """Find an active file by code, counting misses toward an IP block."""
+        return self._guarded(
+            ip,
+            lambda c, now: c.execute("SELECT * FROM files WHERE code = ? AND expires_at > ?", (code, now)).fetchone(),
+            "Code not found or expired",
+        )
+
+    def list_tag(self, ip: str, tag: str) -> list[sqlite3.Row]:
+        """Active files uploaded with `-n tag`, newest first. Misses count like code lookups."""
+        return self._guarded(
+            ip,
+            lambda c, now: c.execute(
+                "SELECT code, name, kind, expires_at FROM files WHERE tag = ? AND expires_at > ? ORDER BY created_at DESC",
+                (tag, now),
+            ).fetchall(),
+            "List not found or all its files have expired",
+        )
+
+    def _guarded[T](self, ip: str, fetch: Callable[[sqlite3.Connection, float], T], not_found: str) -> T:
+        """Run fetch unless ip is blocked; an empty result is a failed lookup that may block ip."""
         s = self.settings()
         now = self.clock()
         error: ApiError
         with self.db.tx() as c:
             block = c.execute("SELECT until FROM ip_blocks WHERE ip = ? AND until > ?", (ip, now)).fetchone()
             if block:
-                error = ApiError(429, "Too many failed code lookups; temporarily blocked", retry_after=block["until"] - now)
+                error = ApiError(429, "Too many failed lookups; temporarily blocked", retry_after=block["until"] - now)
             else:
-                row = c.execute("SELECT * FROM files WHERE code = ? AND expires_at > ?", (code, now)).fetchone()
-                if row:
-                    return row
+                found = fetch(c, now)
+                if found:
+                    return found
                 c.execute("INSERT INTO lookup_failures (ip, ts) VALUES (?, ?)", (ip, now))
                 fails = c.execute(
                     "SELECT COUNT(*) FROM lookup_failures WHERE ip = ? AND ts > ?",
@@ -272,7 +299,7 @@ class Service:
                     c.execute("INSERT OR REPLACE INTO ip_blocks (ip, until) VALUES (?, ?)", (ip, now + s["lookup_block_sec"]))
                     c.execute("DELETE FROM lookup_failures WHERE ip = ?", (ip,))
                     log.warning("blocked %s for %ds after %d failed lookups", ip, s["lookup_block_sec"], fails)
-                error = ApiError(404, "Code not found or expired")
+                error = ApiError(404, not_found)
         raise error
 
     def delete_file(self, code: str) -> bool:
@@ -346,7 +373,7 @@ class Service:
         with self.db.lock:
             c = self.db.conn
             files = c.execute(
-                "SELECT code, name, kind, size, ip, created_at, expires_at FROM files"
+                "SELECT code, name, kind, size, ip, tag, created_at, expires_at FROM files"
                 " WHERE expires_at > ? ORDER BY created_at DESC",
                 (now,),
             ).fetchall()
