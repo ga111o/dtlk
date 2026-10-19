@@ -5,3 +5,8 @@ __pycache__/
 *.pyc
 dtlk-package/dtlk
 dtlk-server/build/
+dtlk-mobile-client/.gradle/
+dtlk-mobile-client/.kotlin/
+dtlk-mobile-client/build/
+dtlk-mobile-client/app/build/
+dtlk-mobile-client/local.properties

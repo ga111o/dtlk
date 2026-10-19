@@ -157,5 +157,5 @@ esac
 say ""
 say "Usage:"
 say "  dtlk up <file-or-dir> [-h hours] [-t tag]"
-say "  dtlk down <6-digit-code>"
+say "  dtlk down [server/]<6-digit-code>"
 say "  dtlk config tag <tag>     (apply -t <tag> to every upload)"

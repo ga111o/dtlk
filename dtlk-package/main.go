@@ -22,10 +22,12 @@ func usage() {
 
 Usage:
   dtlk up [-h hours] [-t tag] <file-or-dir>
-                                      Upload and print a 6-digit code (retention: 1-%d hours)
+                                      Upload, print a 6-digit code and copy its web URL to the clipboard
+                                      (retention: 1-%d hours)
                                       -t groups uploads under a tag, listed at %s/files/<tag>
                                       -t "" uploads without the configured tag
-  dtlk down <6-digit-code>            Download into the current directory
+  dtlk down [server/]<6-digit-code>   Download into the current directory
+                                      server/ (e.g. the Web: link) is used for this download only
   dtlk config [key [value]]           Show or set defaults (keys: %s; "" unsets)
   dtlk -v | version                   Print version
   dtlk -help | help                   Show this help

@@ -30,9 +30,14 @@ func newAPIClient() (*apiClient, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
+	return newAPIClientAt(base), nil
+}
+
+// newAPIClientAt talks to base (a normalized server URL) regardless of the config.
+func newAPIClientAt(base string) *apiClient {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.ResponseHeaderTimeout = 2 * time.Minute
-	return &apiClient{base: base, hc: &http.Client{Transport: tr}}, nil
+	return &apiClient{base: base, hc: &http.Client{Transport: tr}}
 }
 
 // apiError is a non-2xx response; Detail is the server's message.
