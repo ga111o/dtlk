@@ -414,6 +414,27 @@ def test_file_list_by_tag(env):
     assert env.public.get("/files/myproj").text == "List not found or all its files have expired\n"
 
 
+def test_tag_files_api(env):
+    a = upload(env.public, make_archive({"a.txt": b"a"}), name="a.txt", kind="file", hours=1, tag="MyProj")
+    env.clock.advance(1)
+    b = upload(env.public, make_archive({"photos/": None}), name="photos", tag="myproj")
+    upload(env.public, make_archive({"x.txt": b"x"}), name="x.txt", kind="file", tag="other")
+
+    r = env.public.get("/api/tags/MYPROJ")
+    assert r.status_code == 200
+    files = r.json()["files"]
+    assert [f["code"] for f in files] == [b["code"], a["code"]]  # newest first
+    assert files[0] == {
+        "code": b["code"], "name": "photos", "kind": "dir", "size": b["size"], "expires_at": b["expires_at"]
+    }
+    assert files[1]["kind"] == "file" and files[1]["size"] == a["size"]
+
+    env.clock.advance(25 * 3600)
+    r = env.public.get("/api/tags/myproj")
+    assert r.status_code == 404 and r.json()["detail"] == "List not found or all its files have expired"
+    assert env.public.get("/api/tags/a.b").status_code == 404
+
+
 def test_file_list_escapes_names(env):
     upload(env.public, make_archive({"<script>.txt": b"x"}), name="<script>.txt", kind="file", tag="xss")
     page = env.public.get("/files/xss", headers=HTML).text

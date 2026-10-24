@@ -300,7 +300,7 @@ class Service:
         return self._guarded(
             ip,
             lambda c, now: c.execute(
-                "SELECT code, name, kind, expires_at FROM files WHERE tag = ? AND expires_at > ? ORDER BY created_at DESC",
+                "SELECT code, name, kind, size, expires_at FROM files WHERE tag = ? AND expires_at > ? ORDER BY created_at DESC",
                 (tag, now),
             ).fetchall(),
             "List not found or all its files have expired",

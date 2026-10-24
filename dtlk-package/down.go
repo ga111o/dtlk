@@ -17,6 +17,28 @@ import (
 
 var codeRe = regexp.MustCompile(`^[0-9]{6}$`)
 
+// parseLink parses a link that dtlk up prints (Web:, List:). Like a configured
+// server, http(s):// is optional; a query or fragment is rejected.
+func parseLink(arg string) (*url.URL, error) {
+	raw := arg
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return nil, usageErrorf("invalid server address: %s", arg)
+	}
+	u.Path, u.RawPath = strings.TrimRight(u.Path, "/"), ""
+	return u, nil
+}
+
+// cutLast removes the last segment of u's path and returns it.
+func cutLast(u *url.URL) string {
+	dir, last := path.Split(u.Path)
+	u.Path = strings.TrimRight(dir, "/")
+	return last
+}
+
 // parseDownArg accepts "<code>" or "<server>/<code>", such as the Web: link
 // dtlk up prints. server is "" for a bare code (use the configured server);
 // otherwise it is normalized like a configured server, keeping any path prefix.
@@ -28,19 +50,13 @@ func parseDownArg(arg string) (server, code string, err error) {
 		}
 		return "", arg, nil
 	}
-	raw := arg
-	if !strings.Contains(raw, "://") {
-		raw = "https://" + raw
+	u, err := parseLink(arg)
+	if err != nil {
+		return "", "", err
 	}
-	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
-		return "", "", usageErrorf("invalid server address: %s", arg)
-	}
-	dir, code := path.Split(strings.TrimRight(u.Path, "/"))
-	if !codeRe.MatchString(code) {
+	if code = cutLast(u); !codeRe.MatchString(code) {
 		return "", "", usageErrorf("expected <server>/<6-digit-code>: %s", arg)
 	}
-	u.Path, u.RawPath = strings.TrimRight(dir, "/"), ""
 	return u.String(), code, nil
 }
 

@@ -184,6 +184,15 @@ type completeResp struct {
 	Size      int64     `json:"size"`
 }
 
+// tagFile is one active upload in a tag's list (GET /api/tags/{tag}), newest first.
+type tagFile struct {
+	Code      string    `json:"code"`
+	Name      string    `json:"name"`
+	Kind      string    `json:"kind"`
+	Size      int64     `json:"size"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
 type fileInfo struct {
 	Name      string       `json:"name"`
 	Kind      string       `json:"kind"`
@@ -256,6 +265,20 @@ func (c *apiClient) fileInfo(ctx context.Context, code string) (*fileInfo, error
 		return nil, err
 	}
 	return &out, nil
+}
+
+func (c *apiClient) tagFiles(ctx context.Context, tag string) ([]tagFile, error) {
+	req, err := c.newRequest(ctx, http.MethodGet, "/api/tags/"+tag, nil)
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Files []tagFile `json:"files"`
+	}
+	if err := c.doJSON(req, &out); err != nil {
+		return nil, err
+	}
+	return out.Files, nil
 }
 
 // resumableReader streams /api/files/{code}/download and transparently

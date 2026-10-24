@@ -25,10 +25,12 @@ Usage:
                                       Upload, print a 6-digit code and copy its web URL to the clipboard
                                       (retention: 1-%d hours)
                                       Several paths go up as one code (names must differ) and download unpacked
-                                      -t groups uploads under a tag, listed at %s/files/<tag>
+                                      -t groups uploads under a tag, listed by dtlk files <tag> or at %s/files/<tag>
                                       -t "" uploads without the configured tag
   dtlk down [server/]<6-digit-code>   Download into the current directory
                                       server/ (e.g. the Web: link) is used for this download only
+  dtlk files [[server/files/]<tag>]   List a tag's files: code, expiry, size, name (default: the configured tag)
+                                      server/files/ (e.g. the List: link) is used for this listing only
   dtlk config [key [value]]           Show or set defaults (keys: %s; "" unsets)
   dtlk -v | version                   Print version
   dtlk -help | help                   Show this help
@@ -57,6 +59,8 @@ func run(args []string) int {
 		err = cmdUp(ctx, args[1:])
 	case "down":
 		err = cmdDown(ctx, args[1:])
+	case "files":
+		err = cmdFiles(ctx, args[1:])
 	case "config":
 		err = cmdConfig(args[1:])
 	case "version", "-v":

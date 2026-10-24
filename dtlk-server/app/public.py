@@ -90,6 +90,16 @@ def create_public_app(svc: Service) -> FastAPI:
             info["items"] = json.loads(row["items"])
         return info
 
+    @app.get("/api/tags/{tag:tag}")
+    def tag_files(tag: str, request: Request) -> dict[str, Any]:
+        rows = svc.list_tag(client_ip(request), tag.lower())
+        return {
+            "files": [
+                {k: r[k] for k in ("code", "name", "kind", "size")} | {"expires_at": iso(r["expires_at"])}
+                for r in rows
+            ]
+        }
+
     @app.get("/api/files/{code:code}/download")
     def download(code: str, request: Request, range: str | None = Header(default=None)) -> Response:
         row = svc.lookup(client_ip(request), code)
