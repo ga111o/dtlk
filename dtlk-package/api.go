@@ -170,6 +170,7 @@ type createUploadReq struct {
 	Hours         int          `json:"hours"`
 	Tag           string       `json:"tag,omitempty"`
 	Items         []bundleItem `json:"items,omitempty"`
+	Text          bool         `json:"text,omitempty"` // a string (dtlk up -m): dtlk down copies it instead of saving
 }
 
 type createUploadResp struct {
@@ -199,6 +200,7 @@ type fileInfo struct {
 	Size      int64        `json:"size"`
 	ExpiresAt time.Time    `json:"expires_at"`
 	Items     []bundleItem `json:"items"`
+	Text      bool         `json:"text,omitempty"`
 }
 
 func (c *apiClient) createUpload(ctx context.Context, r createUploadReq) (*createUploadResp, error) {

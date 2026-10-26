@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS uploads (
     name         TEXT NOT NULL,
     kind         TEXT NOT NULL,
     items        TEXT,
+    text         INTEGER NOT NULL DEFAULT 0,
     hours        INTEGER NOT NULL,
     reserved     INTEGER NOT NULL,
     received     INTEGER NOT NULL DEFAULT 0,
@@ -39,6 +40,7 @@ CREATE TABLE IF NOT EXISTS files (
     name       TEXT NOT NULL,
     kind       TEXT NOT NULL,
     items      TEXT,
+    text       INTEGER NOT NULL DEFAULT 0,
     size       INTEGER NOT NULL,
     ip         TEXT NOT NULL,
     tag        TEXT,
@@ -83,6 +85,8 @@ class DB:
             for column in ("tag", "items"):  # items: a bundle's [{name, kind}] as JSON
                 if column not in columns:
                     self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
+            if "text" not in columns:  # text: a string upload (dtlk up -m) that dtlk down copies
+                self.conn.execute(f"ALTER TABLE {table} ADD COLUMN text INTEGER NOT NULL DEFAULT 0")
         self.conn.execute("CREATE INDEX IF NOT EXISTS files_tag ON files (tag, expires_at)")
 
     @contextmanager

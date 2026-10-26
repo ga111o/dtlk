@@ -27,8 +27,10 @@ Usage:
                                       Several paths go up as one code (names must differ) and download unpacked
                                       -t groups uploads under a tag, listed by dtlk files <tag> or at %s/files/<tag>
                                       -t "" uploads without the configured tag
+  dtlk up [-h hours] [-t tag] -m text Upload text as dtlk-yymmdd-hhmmss.txt (no paths with -m)
   dtlk down [server/]<6-digit-code>   Download into the current directory
                                       server/ (e.g. the Web: link) is used for this download only
+                                      Text (up -m) is copied to the clipboard and printed instead of saved
   dtlk files [[server/files/]<tag>]   List a tag's files: code, expiry, size, name (default: the configured tag)
                                       server/files/ (e.g. the List: link) is used for this listing only
   dtlk config [key [value]]           Show or set defaults (keys: %s; "" unsets)

@@ -227,6 +227,32 @@ func TestNewBundle(t *testing.T) {
 	}
 }
 
+func TestRoundTripText(t *testing.T) {
+	now := time.Date(2026, 10, 19, 14, 30, 5, 0, time.Local)
+	for _, text := range []string{"héllo\n한글 world", ""} {
+		b := newTextBundle(text, now)
+		if b.name != "dtlk-261019-143005.txt" || b.kind != "file" || b.items() != nil {
+			t.Fatalf("bundle = %q %q %v", b.name, b.kind, b.items())
+		}
+		scan, err := scanBundle(b)
+		if err != nil || scan.Files != 1 || scan.Bytes != int64(len(text)) {
+			t.Fatalf("scan = %+v, %v", scan, err)
+		}
+		dest := t.TempDir()
+		top, err := unpackZstd(t, packBundle(t, b), dest)
+		if err != nil || top != b.name {
+			t.Fatalf("top = %q, %v", top, err)
+		}
+		path := filepath.Join(dest, top)
+		if got := readFile(t, path); got != text {
+			t.Errorf("content = %q, want %q", got, text)
+		}
+		if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o644 || !fi.ModTime().Equal(now) {
+			t.Errorf("file = %v %v, %v", fi.Mode(), fi.ModTime(), err)
+		}
+	}
+}
+
 // rawFrame stores data in a zstd frame of uncompressed blocks, like the web upload
 // page does for data that does not compress (or when the browser lacks WebAssembly).
 func rawFrame(data []byte) []byte {
@@ -340,26 +366,34 @@ func TestParseUpArgs(t *testing.T) {
 		cfg  map[string]string
 		want upOpts
 	}{
-		{[]string{"dir"}, nil, upOpts{24, "", []string{"dir"}}},
-		{[]string{"-h", "3", "dir"}, nil, upOpts{3, "", []string{"dir"}}},
-		{[]string{"dir", "-h", "48"}, nil, upOpts{48, "", []string{"dir"}}},
-		{[]string{"-h=168", "dir"}, nil, upOpts{168, "", []string{"dir"}}},
-		{[]string{"-h", "1", "--", "-weird"}, nil, upOpts{1, "", []string{"-weird"}}},
-		{[]string{"-t", "MyProj", "dir"}, nil, upOpts{24, "myproj", []string{"dir"}}},
-		{[]string{"dir", "-t", "x"}, nil, upOpts{24, "x", []string{"dir"}}},
-		{[]string{"-t=a_b-1", "-h", "3", "dir"}, nil, upOpts{3, "a_b-1", []string{"dir"}}},
-		{[]string{"-t", strings.Repeat("a", 64), "dir"}, nil, upOpts{24, strings.Repeat("a", 64), []string{"dir"}}},
-		{[]string{"-t", "", "dir"}, nil, upOpts{24, "", []string{"dir"}}},
-		{[]string{"a=b"}, nil, upOpts{24, "", []string{"a=b"}}},
-		{[]string{"a", "b"}, nil, upOpts{24, "", []string{"a", "b"}}},
-		{[]string{"a", "-h", "3", "b", "--", "-c"}, nil, upOpts{3, "", []string{"a", "b", "-c"}}},
+		{[]string{"dir"}, nil, upOpts{hours: 24, paths: []string{"dir"}}},
+		{[]string{"-h", "3", "dir"}, nil, upOpts{hours: 3, paths: []string{"dir"}}},
+		{[]string{"dir", "-h", "48"}, nil, upOpts{hours: 48, paths: []string{"dir"}}},
+		{[]string{"-h=168", "dir"}, nil, upOpts{hours: 168, paths: []string{"dir"}}},
+		{[]string{"-h", "1", "--", "-weird"}, nil, upOpts{hours: 1, paths: []string{"-weird"}}},
+		{[]string{"-t", "MyProj", "dir"}, nil, upOpts{hours: 24, tag: "myproj", paths: []string{"dir"}}},
+		{[]string{"dir", "-t", "x"}, nil, upOpts{hours: 24, tag: "x", paths: []string{"dir"}}},
+		{[]string{"-t=a_b-1", "-h", "3", "dir"}, nil, upOpts{hours: 3, tag: "a_b-1", paths: []string{"dir"}}},
+		{[]string{"-t", strings.Repeat("a", 64), "dir"}, nil, upOpts{hours: 24, tag: strings.Repeat("a", 64), paths: []string{"dir"}}},
+		{[]string{"-t", "", "dir"}, nil, upOpts{hours: 24, paths: []string{"dir"}}},
+		{[]string{"a=b"}, nil, upOpts{hours: 24, paths: []string{"a=b"}}},
+		{[]string{"a", "b"}, nil, upOpts{hours: 24, paths: []string{"a", "b"}}},
+		{[]string{"a", "-h", "3", "b", "--", "-c"}, nil, upOpts{hours: 3, paths: []string{"a", "b", "-c"}}},
 		// config defaults; explicit options win; -t "" drops the configured tag
-		{[]string{"dir"}, cfg, upOpts{48, "asdf", []string{"dir"}}},
-		{[]string{"dir"}, map[string]string{"tag": "MyProj"}, upOpts{24, "myproj", []string{"dir"}}},
-		{[]string{"-h", "3", "-t", "other", "dir"}, cfg, upOpts{3, "other", []string{"dir"}}},
-		{[]string{"dir", "-t", ""}, cfg, upOpts{48, "", []string{"dir"}}},
-		{[]string{"-t=", "dir"}, cfg, upOpts{48, "", []string{"dir"}}},
-		{[]string{"-h", "5", "-t", "x", "dir"}, map[string]string{"hours": "500", "tag": "a.b"}, upOpts{5, "x", []string{"dir"}}},
+		{[]string{"dir"}, cfg, upOpts{hours: 48, tag: "asdf", paths: []string{"dir"}}},
+		{[]string{"dir"}, map[string]string{"tag": "MyProj"}, upOpts{hours: 24, tag: "myproj", paths: []string{"dir"}}},
+		{[]string{"-h", "3", "-t", "other", "dir"}, cfg, upOpts{hours: 3, tag: "other", paths: []string{"dir"}}},
+		{[]string{"dir", "-t", ""}, cfg, upOpts{hours: 48, paths: []string{"dir"}}},
+		{[]string{"-t=", "dir"}, cfg, upOpts{hours: 48, paths: []string{"dir"}}},
+		{[]string{"-h", "5", "-t", "x", "dir"}, map[string]string{"hours": "500", "tag": "a.b"}, upOpts{hours: 5, tag: "x", paths: []string{"dir"}}},
+		// -m uploads text instead of paths, taken as it is
+		{[]string{"-m", "hello world"}, nil, upOpts{hours: 24, text: "hello world", hasText: true}},
+		{[]string{"-m=a=b"}, nil, upOpts{hours: 24, text: "a=b", hasText: true}},
+		{[]string{"-m", ""}, nil, upOpts{hours: 24, hasText: true}},
+		{[]string{"-m="}, nil, upOpts{hours: 24, hasText: true}},
+		{[]string{"-m", "-h"}, nil, upOpts{hours: 24, text: "-h", hasText: true}},
+		{[]string{"-h", "3", "-m", "한글\n", "-t", "x"}, cfg, upOpts{hours: 3, tag: "x", text: "한글\n", hasText: true}},
+		{[]string{"-m", "x"}, cfg, upOpts{hours: 48, tag: "asdf", text: "x", hasText: true}},
 	}
 	for _, c := range ok {
 		got, err := parseUpArgs(c.args, c.cfg)
@@ -374,6 +408,8 @@ func TestParseUpArgs(t *testing.T) {
 		{"-t", strings.Repeat("a", 65), "dir"}, {"-t", "한글", "dir"}, {"-t", "a.b", "dir"},
 		// old option names are gone
 		{"--h", "3", "dir"}, {"--h=3", "dir"}, {"-n", "x", "dir"}, {"-n=x", "dir"},
+		// one -m, never with paths
+		{"-m"}, {"-h", "3", "-m"}, {"-m", "a", "-m", "b"}, {"-m=a", "-m="}, {"-m", "a", "dir"}, {"dir", "-m", "a"}, {"-m", "a", "--", "dir"},
 	}
 	for _, args := range bad {
 		if _, err := parseUpArgs(args, nil); err == nil {

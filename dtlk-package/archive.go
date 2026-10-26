@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -18,8 +19,12 @@ import (
 // or a dtlk-yymmdd-hhmmss folder that holds several uploaded paths (kind
 // "bundle", unpacked in place on download).
 
-// source is one path given to dtlk up, its name in the archive and its kind ("file" or "dir").
-type source struct{ path, name, kind string }
+// source is one path given to dtlk up, its name in the archive and its kind
+// ("file" or "dir"). A source without a path is a file holding data (dtlk up -m).
+type source struct {
+	path, name, kind string
+	data             []byte
+}
 
 // bundle is what one dtlk up sends: a single source as itself, or several
 // sources inside a folder named name.
@@ -27,7 +32,7 @@ type bundle struct {
 	name  string // top-level archive name
 	kind  string // "file", "dir" or "bundle"
 	srcs  []source
-	mtime time.Time // of the folder holding several sources
+	mtime time.Time // of the folder holding several sources, and of data sources
 }
 
 // items lists a bundle's sources for the server; nil for a single source.
@@ -55,8 +60,22 @@ func (d dirInfo) ModTime() time.Time { return d.mtime }
 func (d dirInfo) IsDir() bool        { return true }
 func (d dirInfo) Sys() any           { return nil }
 
+// dataInfo describes a source that has data instead of a path.
+type dataInfo struct {
+	name  string
+	data  []byte
+	mtime time.Time
+}
+
+func (d dataInfo) Name() string       { return d.name }
+func (d dataInfo) Size() int64        { return int64(len(d.data)) }
+func (d dataInfo) Mode() fs.FileMode  { return 0o644 }
+func (d dataInfo) ModTime() time.Time { return d.mtime }
+func (d dataInfo) IsDir() bool        { return false }
+func (d dataInfo) Sys() any           { return nil }
+
 // walk visits every entry of b in archive order (see walkSource). The folder
-// holding several sources comes first, with an empty path.
+// holding several sources and data sources come with an empty path.
 func (b bundle) walk(fn func(path, name string, info fs.FileInfo) error) error {
 	prefix := ""
 	if b.kind == "bundle" {
@@ -66,6 +85,12 @@ func (b bundle) walk(fn func(path, name string, info fs.FileInfo) error) error {
 		prefix = b.name + "/"
 	}
 	for _, s := range b.srcs {
+		if s.path == "" {
+			if err := fn("", prefix+s.name, dataInfo{s.name, s.data, b.mtime}); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := walkSource(s.path, prefix+s.name, fn); err != nil {
 			return err
 		}
@@ -197,12 +222,18 @@ func writeTar(ctx context.Context, w io.Writer, b bundle, warn func(string), onR
 		if !mode.IsRegular() {
 			return nil
 		}
-		f, err := os.Open(p)
-		if err != nil {
-			return err
+		var r io.Reader
+		if d, ok := info.(dataInfo); ok {
+			r = bytes.NewReader(d.data)
+		} else {
+			f, err := os.Open(p)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			r = f
 		}
-		defer f.Close()
-		if _, err := io.CopyN(tw, &countingReader{r: f, on: onRead}, hdr.Size); err != nil {
+		if _, err := io.CopyN(tw, &countingReader{r: r, on: onRead}, hdr.Size); err != nil {
 			if errors.Is(err, io.EOF) {
 				return fmt.Errorf("file size changed during upload: %s", p)
 			}

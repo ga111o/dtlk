@@ -98,8 +98,11 @@ def upload(
     hours: int = 24,
     tag: str | None = None,
     items: list[dict] | None = None,
+    text: bool = False,
 ) -> dict:
     body = {"name": name, "kind": kind, "estimated_size": len(data), "hours": hours, "tag": tag, "items": items}
+    if text:
+        body["text"] = True
     r = client.post("/api/uploads", json=body)
     assert r.status_code == 200, r.text
     upload_id = r.json()["upload_id"]

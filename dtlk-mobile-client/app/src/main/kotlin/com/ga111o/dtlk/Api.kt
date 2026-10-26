@@ -52,7 +52,10 @@ class Api(val base: String, private val userAgent: String) {
     @Volatile
     private var canceled: String? = null
 
-    /** items: the file names in a bundle (kind "bundle"), empty otherwise. */
+    /**
+     * items: the file names in a bundle (kind "bundle"), empty otherwise.
+     * text: the file is shared text, which dtlk down copies instead of saving.
+     */
     fun createUpload(
         name: String,
         kind: String,
@@ -60,6 +63,7 @@ class Api(val base: String, private val userAgent: String) {
         hours: Int,
         tag: String,
         items: List<String> = emptyList(),
+        text: Boolean = false,
     ): CreatedUpload {
         val body = JSONObject()
             .put("name", name)
@@ -70,6 +74,7 @@ class Api(val base: String, private val userAgent: String) {
         if (items.isNotEmpty()) {
             body.put("items", JSONArray(items.map { JSONObject().put("name", it).put("kind", "file") }))
         }
+        if (text) body.put("text", true)
         val res = json(request("POST", "/api/uploads", body.toString().toByteArray(), "application/json", CALL_TIMEOUT_MS))
         return try {
             CreatedUpload(res.getString("upload_id"), res.getInt("chunk_size"), res.getLong("max_size"))

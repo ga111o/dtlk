@@ -143,6 +143,7 @@ class UploaderTest {
         assertEquals(setOf("file"), (0 until items.length()).map { items.getJSONObject(it).getString("kind") }.toSet())
         assertEquals(48, c.getInt("hours"))
         assertEquals("proj", c.getString("tag"))
+        assertFalse(c.has("text"))
         assertTrue(c.getLong("estimated_size") >= Tar.size(archive.entries))
 
         val got = server.unpack()
@@ -163,7 +164,19 @@ class UploaderTest {
         assertEquals("file", c.getString("kind"))
         assertFalse(c.has("tag"))
         assertFalse(c.has("items"))
+        assertFalse(c.has("text"))
         assertEquals(listOf("a.txt"), server.unpack().keys.toList())
+    }
+
+    @Test
+    fun sharedTextIsMarked() {
+        val data = "https://example.com/\n한글".toByteArray()
+        uploader().run(Archive.of(listOf(src("$stamp.txt", data)), stamp, now, text = true), 24, "", now) { _, _ -> }
+        val c = server.created!!
+        assertEquals("$stamp.txt", c.getString("name"))
+        assertEquals("file", c.getString("kind"))
+        assertTrue(c.getBoolean("text"))
+        assertArrayEquals(data, server.unpack()["$stamp.txt"])
     }
 
     @Test

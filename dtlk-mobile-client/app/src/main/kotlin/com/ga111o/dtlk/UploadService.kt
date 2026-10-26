@@ -100,7 +100,7 @@ class UploadService : Service() {
                 val bytes = it.toByteArray(Charsets.UTF_8)
                 sources += Source("${job.stamp}.txt", bytes.size.toLong(), job.now) { ByteArrayInputStream(bytes) }
             }
-            val bundle = Archive.of(sources, job.stamp, job.now)
+            val bundle = Archive.of(sources, job.stamp, job.now, text = job.uris.isEmpty() && job.text != null)
             label = bundle.label
             up.canceled?.let { throw CanceledException(it) }
 

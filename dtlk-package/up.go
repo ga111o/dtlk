@@ -42,12 +42,15 @@ func parseTag(s string) (string, error) {
 }
 
 type upOpts struct {
-	hours int
-	tag   string
-	paths []string
+	hours   int
+	tag     string
+	paths   []string
+	text    string // -m: uploaded as a text file instead of paths
+	hasText bool   // -m was given (text may be "")
 }
 
-// parseUpArgs accepts "-h N" / "-h=N" and "-t TAG" / "-t=TAG" anywhere around one or more paths.
+// parseUpArgs accepts "-h N" / "-h=N", "-t TAG" / "-t=TAG" and "-m TEXT" / "-m=TEXT"
+// anywhere around one or more paths, or around nothing when -m is given.
 // An option that is not given falls back to cfg (the config file), then to the built-in default.
 // An empty tag (-t "" or -t=) uploads without one, even when cfg has a tag.
 func parseUpArgs(args []string, cfg map[string]string) (o upOpts, err error) {
@@ -59,23 +62,32 @@ func parseUpArgs(args []string, cfg map[string]string) (o upOpts, err error) {
 		case a == "--":
 			o.paths = append(o.paths, args[i+1:]...)
 			i = len(args)
-		case flag == "-h" || flag == "-t":
+		case flag == "-h" || flag == "-t" || flag == "-m":
 			if !hasVal {
 				if i+1 >= len(args) {
-					if flag == "-h" {
+					switch flag {
+					case "-h":
 						return upOpts{}, usageErrorf("missing hours after -h (1-%d)", maxHours)
+					case "-t":
+						return upOpts{}, usageErrorf("missing tag after -t")
 					}
-					return upOpts{}, usageErrorf("missing tag after -t")
+					return upOpts{}, usageErrorf("missing text after -m")
 				}
 				i++
 				val = args[i]
 			}
-			if flag == "-h" {
+			switch flag {
+			case "-h":
 				o.hours, err = parseHours(val)
 				hoursSet = true
-			} else {
+			case "-t":
 				o.tag, err = parseTag(val)
 				tagSet = true
+			default:
+				if o.hasText {
+					return upOpts{}, usageErrorf("-m can be given only once")
+				}
+				o.text, o.hasText = val, true
 			}
 			if err != nil {
 				return upOpts{}, err
@@ -86,8 +98,11 @@ func parseUpArgs(args []string, cfg map[string]string) (o upOpts, err error) {
 			o.paths = append(o.paths, a)
 		}
 	}
-	if len(o.paths) == 0 {
-		return upOpts{}, usageErrorf("usage: dtlk up [-h hours] [-t tag] <file-or-dir>...")
+	if o.hasText && len(o.paths) > 0 {
+		return upOpts{}, usageErrorf("-m cannot be combined with paths")
+	}
+	if len(o.paths) == 0 && !o.hasText {
+		return upOpts{}, usageErrorf("usage: dtlk up [-h hours] [-t tag] (<file-or-dir>... | -m text)")
 	}
 
 	if !hoursSet {
@@ -139,13 +154,20 @@ func newBundle(paths []string, now time.Time) (bundle, error) {
 			return bundle{}, fmt.Errorf("duplicate name: %s (%s, %s)", name, prev, path)
 		}
 		seen[name] = path
-		b.srcs = append(b.srcs, source{abs, name, kind})
+		b.srcs = append(b.srcs, source{path: abs, name: name, kind: kind})
 	}
 	b.name, b.kind = b.srcs[0].name, b.srcs[0].kind
 	if len(b.srcs) > 1 {
 		b.name, b.kind = now.Format("dtlk-060102-150405"), "bundle"
 	}
 	return b, nil
+}
+
+// newTextBundle is the dtlk-yymmdd-hhmmss.txt file (local time now) that dtlk up -m
+// uploads, holding text as it is, like the app does for shared text.
+func newTextBundle(text string, now time.Time) bundle {
+	name := now.Format("dtlk-060102-150405") + ".txt"
+	return bundle{name: name, kind: "file", srcs: []source{{name: name, kind: "file", data: []byte(text)}}, mtime: now}
 }
 
 func cmdUp(ctx context.Context, args []string) error {
@@ -158,8 +180,10 @@ func cmdUp(ctx context.Context, args []string) error {
 		return err
 	}
 	hours := opts.hours
-	b, err := newBundle(opts.paths, time.Now())
-	if err != nil {
+	var b bundle
+	if opts.hasText {
+		b = newTextBundle(opts.text, time.Now())
+	} else if b, err = newBundle(opts.paths, time.Now()); err != nil {
 		return err
 	}
 
@@ -184,6 +208,7 @@ func cmdUp(ctx context.Context, args []string) error {
 		Hours:         hours,
 		Tag:           opts.tag,
 		Items:         b.items(),
+		Text:          opts.hasText,
 	})
 	if err != nil {
 		return err

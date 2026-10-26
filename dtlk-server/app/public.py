@@ -30,6 +30,7 @@ class CreateUpload(BaseModel):
     hours: int = 24
     tag: str | None = None
     items: list[Item] | None = None  # a bundle's top-level entries
+    text: bool = False  # a string (dtlk up -m): dtlk down copies it instead of saving
 
 
 def _body_chunks(body: Any, chunks: Iterable[bytes] | None = None) -> Iterator[bytes]:
@@ -53,7 +54,7 @@ def create_public_app(svc: Service) -> FastAPI:
     def create_upload(body: CreateUpload, request: Request) -> dict[str, Any]:
         items = None if body.items is None else [it.model_dump() for it in body.items]
         return svc.create_upload(
-            client_ip(request), body.name, body.kind, body.estimated_size, body.hours, body.tag, items
+            client_ip(request), body.name, body.kind, body.estimated_size, body.hours, body.tag, items, body.text
         )
 
     @app.put("/api/uploads/{upload_id}/parts/{n:int}")
@@ -88,6 +89,8 @@ def create_public_app(svc: Service) -> FastAPI:
         info = {"name": row["name"], "kind": row["kind"], "size": row["size"], "expires_at": iso(row["expires_at"])}
         if row["items"]:
             info["items"] = json.loads(row["items"])
+        if row["text"]:
+            info["text"] = True
         return info
 
     @app.get("/api/tags/{tag:tag}")

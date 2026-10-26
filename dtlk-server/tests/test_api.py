@@ -294,6 +294,23 @@ def test_bundle_info_and_page(env):
     assert f"{BUNDLE}/" in env.public.get("/files/bun").text
 
 
+def test_text_upload_is_marked(env):
+    name = "dtlk-261019-143005.txt"
+    code = upload(env.public, make_archive({name: "héllo".encode()}), name=name, kind="file", text=True)["code"]
+    info = env.public.get(f"/api/files/{code}").json()
+    assert info["name"] == name and info["kind"] == "file" and info["text"] is True
+    assert env.public.get(f"/{code}").content == "héllo".encode()  # browsers and curl still get the txt
+    plain = upload(env.public, make_archive({"a": b""}), name="a", kind="file")["code"]
+    assert "text" not in env.public.get(f"/api/files/{plain}").json()
+
+
+@pytest.mark.parametrize("kind,items", [("dir", None), ("bundle", BUNDLE_ITEMS)])
+def test_only_a_file_can_be_text(env, kind, items):
+    body = {"name": BUNDLE, "kind": kind, "estimated_size": 10, "items": items, "text": True}
+    r = env.public.post("/api/uploads", json=body)
+    assert r.status_code == 400 and r.json()["detail"] == "Only a file can be text"
+
+
 def test_bundle_items_download_separately(env):
     code = upload_bundle(env)
     r = env.public.get(f"/{code}/linear algebra 3.pdf")
@@ -480,7 +497,7 @@ def test_old_database_is_migrated(tmp_path):
 
     db = DB(path)
     for table in ("uploads", "files"):
-        assert {"tag", "items"} <= {r["name"] for r in db.conn.execute(f"PRAGMA table_info({table})")}
+        assert {"tag", "items", "text"} <= {r["name"] for r in db.conn.execute(f"PRAGMA table_info({table})")}
     assert db.conn.execute("SELECT name FROM sqlite_master WHERE name = 'files_tag'").fetchone()
-    assert db.conn.execute("SELECT name, tag FROM files").fetchone()[:] == ("a.txt", None)
+    assert db.conn.execute("SELECT name, tag, text FROM files").fetchone()[:] == ("a.txt", None, 0)
     DB(path)  # running the migration again is a no-op

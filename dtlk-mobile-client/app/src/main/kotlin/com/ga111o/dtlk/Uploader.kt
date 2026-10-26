@@ -23,8 +23,8 @@ class UploadError(message: String) : Exception(message)
 class Source(val name: String, val size: Long, val mtime: Long, val open: () -> InputStream)
 
 /**
- * What goes to the server: name, kind and (for a bundle) the item names for
- * /api/uploads, and the archive members.
+ * What goes to the server: name, kind, (for a bundle) the item names and
+ * whether the file is shared text for /api/uploads, and the archive members.
  */
 class Archive(
     val name: String,
@@ -32,6 +32,7 @@ class Archive(
     val entries: List<Entry>,
     val bytes: Long,
     val items: List<String> = emptyList(),
+    val text: Boolean = false,
 ) {
     val label: String get() = name + if (kind != "file") "/" else ""
 
@@ -39,9 +40,9 @@ class Archive(
         /**
          * One item stays as it is; several go into a <stamp> bundle (stamp is
          * dtlk-yymmdd-hhmmss) that downloads unpacked, like the web upload page.
-         * Names must differ.
+         * Names must differ. text marks a single item as shared text, like dtlk up -m.
          */
-        fun of(items: List<Source>, stamp: String, now: Long): Archive {
+        fun of(items: List<Source>, stamp: String, now: Long, text: Boolean = false): Archive {
             if (items.isEmpty()) throw UploadError("Nothing to upload")
             val seen = HashSet<String>()
             for (s in items) {
@@ -51,7 +52,7 @@ class Archive(
             val bytes = items.sumOf { it.size }
             if (items.size == 1) {
                 val s = items[0]
-                return Archive(s.name, "file", listOf(Entry(s.name, false, s.size, s.mtime, s.open)), bytes)
+                return Archive(s.name, "file", listOf(Entry(s.name, false, s.size, s.mtime, s.open)), bytes, text = text)
             }
             val entries = listOf(Entry(stamp, true, mtime = now)) +
                 items.map { Entry("$stamp/${it.name}", false, it.size, it.mtime, it.open) }
@@ -91,7 +92,7 @@ class Uploader(private val api: Api, private val backoff: (Int) -> Long = ::back
     /** progress(fileBytesRead, totalFileBytes) is called from the calling thread. */
     fun run(b: Archive, hours: Int, tag: String, now: Long, progress: (Long, Long) -> Unit): Completed {
         val tarSize = Tar.size(b.entries)
-        val up = api.createUpload(b.name, b.kind, tarSize + tarSize / 100 + (1 shl 20), hours, tag, b.items)
+        val up = api.createUpload(b.name, b.kind, tarSize + tarSize / 100 + (1 shl 20), hours, tag, b.items, b.text)
         try {
             send(up, b, now, progress)
             return api.complete(up.id)

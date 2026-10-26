@@ -117,11 +117,14 @@ class Service:
         hours: int,
         tag: str | None = None,
         items: list[dict[str, str]] | None = None,
+        text: bool = False,
     ) -> dict[str, Any]:
         if not valid_name(name):
             raise ApiError(400, "Invalid file name")
         if kind not in KINDS:
             raise ApiError(400, "kind must be 'file', 'dir' or 'bundle'")
+        if text and kind != "file":
+            raise ApiError(400, "Only a file can be text")
         if kind == "bundle":
             items_json: str | None = check_items(items)
         elif items is not None:
@@ -156,9 +159,9 @@ class Service:
             else:
                 self._check_cap(c, now, reserve, s["storage_cap_bytes"])
                 c.execute(
-                    "INSERT INTO uploads (id, ip, name, kind, items, hours, reserved, object_key, tag, created_at, updated_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (upload_id, ip, name, kind, items_json, hours, reserve, key, tag, now, now),
+                    "INSERT INTO uploads (id, ip, name, kind, items, text, hours, reserved, object_key, tag, created_at, updated_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (upload_id, ip, name, kind, items_json, int(text), hours, reserve, key, tag, now, now),
                 )
                 c.execute("INSERT INTO upload_starts (ip, ts) VALUES (?, ?)", (ip, now))
         if error:
@@ -264,9 +267,12 @@ class Service:
                 if not c.execute("SELECT 1 FROM files WHERE code = ?", (code,)).fetchone():
                     break
             c.execute(
-                "INSERT INTO files (code, object_key, name, kind, items, size, ip, tag, created_at, expires_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (code, row["object_key"], row["name"], row["kind"], row["items"], size, row["ip"], row["tag"], now, expires_at),
+                "INSERT INTO files (code, object_key, name, kind, items, text, size, ip, tag, created_at, expires_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    code, row["object_key"], row["name"], row["kind"], row["items"], row["text"],
+                    size, row["ip"], row["tag"], now, expires_at,
+                ),
             )
             c.execute("DELETE FROM upload_parts WHERE upload_id = ?", (upload_id,))
             c.execute("DELETE FROM uploads WHERE id = ?", (upload_id,))

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -82,18 +83,23 @@ func cmdDown(ctx context.Context, args []string) error {
 	if validName(info.Name) != nil {
 		return fmt.Errorf("server returned an invalid file name: %q", info.Name)
 	}
+	if info.Text && info.Kind != "file" {
+		return fmt.Errorf("server returned a text upload of kind %q", info.Kind)
+	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
 	}
-	var p *prompter
-	if isTerminal(os.Stdin) {
-		p = &prompter{in: bufio.NewReader(os.Stdin), out: os.Stderr}
-	}
-	plan, err := planSaves(cwd, info, p)
-	if err != nil {
-		return err
+	var plan []save
+	if !info.Text {
+		var p *prompter
+		if isTerminal(os.Stdin) {
+			p = &prompter{in: bufio.NewReader(os.Stdin), out: os.Stderr}
+		}
+		if plan, err = planSaves(cwd, info, p); err != nil {
+			return err
+		}
 	}
 
 	tmp, err := os.MkdirTemp(cwd, ".dtlk-tmp-")
@@ -127,6 +133,9 @@ func cmdDown(ctx context.Context, args []string) error {
 			return err
 		}
 	}
+	if info.Text {
+		return showText(filepath.Join(tmp, top))
+	}
 
 	for _, s := range plan {
 		if taken, err := exists(filepath.Join(cwd, s.to)); !s.overwrite && (err != nil || taken) {
@@ -145,6 +154,28 @@ func cmdDown(ctx context.Context, args []string) error {
 		}
 		fmt.Fprintf(os.Stderr, "Saved: ./%s\n", s.to)
 	}
+	return nil
+}
+
+// showText copies a text upload (dtlk up -m), unpacked at path, to the
+// clipboard and prints it as it is instead of saving it.
+func showText(path string) error {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !fi.Mode().IsRegular() {
+		return errors.New("downloaded text upload is not a regular file")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	copyToClipboard(string(data))
+	if _, err := os.Stdout.Write(data); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "Copied to clipboard (%d chars)\n", utf8.RuneCount(data))
 	return nil
 }
 

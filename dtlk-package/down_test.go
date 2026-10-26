@@ -147,6 +147,48 @@ func TestCmdDownUnpacksBundle(t *testing.T) {
 	}
 }
 
+func TestCmdDownCopiesText(t *testing.T) {
+	setConfigHome(t)
+	_, tty := fakeClipboard(t, map[string]string{})
+	const text = "héllo\n한글 world" // no trailing newline
+	b := newTextBundle(text, time.Now())
+	srv := fakeServer(t, "", "123456", fileInfo{Name: b.name, Kind: "file", Text: true}, packBundle(t, b))
+
+	dest := t.TempDir()
+	t.Chdir(dest)
+	mustWrite(t, filepath.Join(dest, b.name), "mine", 0o644) // no conflict prompt: nothing is saved
+	out := filepath.Join(t.TempDir(), "stdout")
+	f, err := os.Create(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	stdout := os.Stdout
+	os.Stdout = f
+	err = cmdDown(context.Background(), []string{srv.URL + "/123456"})
+	os.Stdout = stdout
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, out); got != text {
+		t.Errorf("stdout = %q, want %q", got, text)
+	}
+	if got, want := readFile(t, tty), osc52(text, false); got != want {
+		t.Errorf("tty = %q, want %q", got, want)
+	}
+	if entries, _ := os.ReadDir(dest); len(entries) != 1 || readFile(t, filepath.Join(dest, b.name)) != "mine" {
+		t.Errorf("text download touched %s: %v", dest, entries)
+	}
+
+	// Only a file can be text.
+	src := t.TempDir()
+	mustWrite(t, filepath.Join(src, "test1/a.txt"), "a", 0o644)
+	bad := fakeServer(t, "", "123456", fileInfo{Name: "test1", Kind: "dir", Text: true}, packZstd(t, filepath.Join(src, "test1"), "test1"))
+	if err := cmdDown(context.Background(), []string{bad.URL + "/123456"}); err == nil || !strings.Contains(err.Error(), "text upload") {
+		t.Fatalf("text dir: %v", err)
+	}
+}
+
 func TestPlanSavesRejectsBadItems(t *testing.T) {
 	dir := t.TempDir()
 	for _, items := range [][]bundleItem{nil, {{"a", "file"}, {"a", "file"}}, {{"a", "file"}, {"../x", "file"}}, {{"a", "file"}, {"", "dir"}}} {
