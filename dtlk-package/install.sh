@@ -42,9 +42,15 @@ healthy() { curl -fsS --max-time 10 "$1/api/health" >/dev/null 2>&1; }
 
 # Give up on a connection that stays under 10 KB/s for 30 s and retry on a new one,
 # instead of trickling forever with no output.
+# --retry-all-errors needs curl >= 7.71 (Ubuntu 20.04 ships 7.68).
+RETRY_ALL=""
+if curl --retry-all-errors -V >/dev/null 2>&1; then
+  RETRY_ALL="--retry-all-errors"
+fi
 fetch() {
+  # shellcheck disable=SC2086
   curl -fL --connect-timeout 10 --speed-limit 10240 --speed-time 30 \
-    --retry 3 --retry-delay 2 --retry-all-errors "$@"
+    --retry 3 --retry-delay 2 $RETRY_ALL "$@"
 }
 
 [ "$(uname -s)" = "Linux" ] || die "Only Linux is supported."
